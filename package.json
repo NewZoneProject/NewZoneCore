@@ -1,0 +1,11 @@
+{
+  "name": "nzcore",
+  "version": "0.1.0",
+  "description": "NewZoneCore is an autonomous trust and process core.",
+  "main": "core.js",
+  "bin": {
+    "nzcore": "./bin/nzcore"
+  },
+  "type": "module",
+  "license": "MIT"
+}
