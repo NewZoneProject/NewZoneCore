@@ -350,6 +350,34 @@ export const commands = {
         console.log(err.message);
       }
     }
+  },
+
+  ping: {
+    desc: 'ping a peer via router/protocol',
+    usage: 'nzcore ping <peerId>',
+    details: 'Sends a ping message to a peer via IPC.',
+    handler: async (args) => {
+      const mod = await lazy('./ipc-client.js');
+      if (!mod?.sendIpcCommand) {
+        console.log('[nzcore] IPC client unavailable.');
+        return;
+      }
+
+      const peerId = args[0];
+      if (!peerId) {
+        console.log('Usage: nzcore ping <peerId>');
+        return;
+      }
+
+      try {
+        const raw = await mod.sendIpcCommand(`router:ping ${peerId}`);
+        const data = JSON.parse(raw);
+        console.log(JSON.stringify(data, null, 2));
+      } catch (err) {
+        console.log('[nzcore] ping failed');
+        console.log(err.message);
+      }
+    }
   }
 
 };

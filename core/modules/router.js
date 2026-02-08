@@ -1,6 +1,7 @@
 // Module: Distributed Router
-// Description: Minimal message router for NewZoneCore. Uses secure-channel
-//              module to send encrypted messages to trusted peers.
+// Description: Envelope-based encrypted router for NewZoneCore.
+//              Uses secure-channel module and envelope module to
+//              send/receive signed, encrypted messages.
 // File: core/modules/router.js
 
 /**
@@ -16,6 +17,10 @@ export function createRouter({ supervisor }) {
 
   const routes = {}; // { peerId: { peerId, pubkey } }
 
+  // -------------------------------------------------------------------------
+  // Route management
+  // -------------------------------------------------------------------------
+
   function addRoute(peerId, pubkey) {
     routes[peerId] = { peerId, pubkey };
     supervisor.emit('router:route-added', { peerId });
@@ -30,62 +35,119 @@ export function createRouter({ supervisor }) {
     return Object.values(routes);
   }
 
+  // -------------------------------------------------------------------------
+  // Envelope helpers
+  // -------------------------------------------------------------------------
+
+  function getEnvelopeModule() {
+    return supervisor.modules?.getModule
+      ? supervisor.modules.getModule('envelope')
+      : null;
+  }
+
+  function getSecureModule() {
+    return supervisor.modules?.getModule
+      ? supervisor.modules.getModule('secure-channel')
+      : null;
+  }
+
+  // -------------------------------------------------------------------------
+  // SEND
+  // -------------------------------------------------------------------------
+
   async function send(peerId, payload) {
     const route = routes[peerId];
     if (!route) {
       throw new Error(`No route for peer ${peerId}`);
     }
 
-    const secure = supervisor.modules?.getModule
-      ? supervisor.modules.getModule('secure-channel')
-      : null;
+    const envelope = getEnvelopeModule();
+    const secure = getSecureModule();
 
-    if (!secure) {
-      throw new Error('secure-channel module not available');
-    }
+    if (!envelope) throw new Error('envelope module not available');
+    if (!secure) throw new Error('secure-channel module not available');
 
+    // Create or reuse secure channel
     const channel =
       secure.getChannel(peerId) ||
       (await secure.createChannel(peerId, route.pubkey));
 
-    const data = new TextEncoder().encode(JSON.stringify(payload));
-    const encrypted = await secure.encrypt(channel, data);
+    // Build envelope
+    const env = await envelope.create({
+      type: 'msg',
+      to: peerId,
+      from: supervisor.getNodeId(),
+      body: payload,
+      sign: async (data) => secure.sign(data)
+    });
+
+    // Serialize envelope
+    const encoded = new TextEncoder().encode(JSON.stringify(env));
+
+    // Encrypt
+    const encrypted = await secure.encrypt(channel, encoded);
 
     supervisor.emit('router:send', {
       peerId,
       size: encrypted.length
     });
 
-    // Phase 2.x: here we would actually transmit encrypted bytes over network.
-    // For now, this is a local-only placeholder.
+    // Phase 2.x: actual network transport goes here
     return encrypted;
   }
 
-  async function receive(peerId, encrypted) {
-    const secure = supervisor.modules?.getModule
-      ? supervisor.modules.getModule('secure-channel')
-      : null;
+  // -------------------------------------------------------------------------
+  // RECEIVE
+  // -------------------------------------------------------------------------
 
-    if (!secure) {
-      throw new Error('secure-channel module not available');
-    }
+  async function receive(peerId, encrypted) {
+    const envelope = getEnvelopeModule();
+    const secure = getSecureModule();
+
+    if (!envelope) throw new Error('envelope module not available');
+    if (!secure) throw new Error('secure-channel module not available');
 
     const channel = secure.getChannel(peerId);
     if (!channel) {
       throw new Error(`No channel for peer ${peerId}`);
     }
 
+    // Decrypt
     const decrypted = await secure.decrypt(channel, encrypted);
     const json = new TextDecoder().decode(decrypted);
-    const payload = JSON.parse(json);
+
+    // Parse envelope
+    const env = JSON.parse(json);
+
+    // Validate envelope
+    const ok = await envelope.verify(env, async (data, sig, pub) =>
+      secure.verify(data, sig, pub)
+    );
+
+    if (!ok) {
+      supervisor.emit('router:invalid', { peerId });
+      throw new Error('Invalid envelope signature');
+    }
 
     supervisor.emit('router:receive', {
       peerId,
       size: encrypted.length
     });
 
-    return payload;
+    // Emit high-level message event
+    supervisor.emit('router:message', {
+      from: env.from,
+      to: env.to,
+      type: env.type,
+      body: env.body
+    });
+
+    return env;
   }
+
+  // -------------------------------------------------------------------------
+  // API
+  // -------------------------------------------------------------------------
 
   return {
     addRoute,

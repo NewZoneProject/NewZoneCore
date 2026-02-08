@@ -88,6 +88,25 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh }) {
   }
 
   // -------------------------------------------------------------------------
+  // Module Registry (Phase 2.0)
+  // -------------------------------------------------------------------------
+
+  const moduleStore = {}; // { name: moduleInstance }
+
+  function registerModule(name, instance) {
+    moduleStore[name] = instance;
+    emit('module:registered', { name });
+  }
+
+  function getModule(name) {
+    return moduleStore[name] || null;
+  }
+
+  function listModules() {
+    return Object.keys(moduleStore);
+  }
+
+  // -------------------------------------------------------------------------
   // Identity / Crypto
   // -------------------------------------------------------------------------
 
@@ -163,6 +182,13 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh }) {
     // service registry
     registerService,
     getServices,
+
+    // module registry
+    modules: {
+      registerModule,
+      getModule,
+      listModules
+    },
 
     // identity / crypto
     getNodeId,

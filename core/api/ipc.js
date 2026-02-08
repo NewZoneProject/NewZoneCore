@@ -1,5 +1,5 @@
 // Module: IPC Server
-// Description: Minimal UNIX/Windows socket IPC server for NewZoneCore.
+// Description: Cross-platform, self-contained IPC server for NewZoneCore.
 // File: core/api/ipc.js
 
 import fs from 'fs/promises';
@@ -8,37 +8,40 @@ import os from 'os';
 import path from 'path';
 
 // ---------------------------------------------------------------------------
-// IPC socket path (Windows named pipe or UNIX socket)
-// Termux fix: use $TMPDIR or Termux tmp directory instead of /tmp
+// Universal IPC socket path (cross-platform, auto-created)
 // ---------------------------------------------------------------------------
+
+const RUNTIME_DIR = path.join(process.cwd(), 'runtime', 'ipc');
 
 const SOCKET_PATH =
   os.platform() === 'win32'
     ? '\\\\.\\pipe\\nzcore'
-    : path.join(
-        process.env.TMPDIR || '/data/data/com.termux/files/usr/tmp',
-        'nzcore.sock'
-      );
+    : path.join(RUNTIME_DIR, 'nzcore.sock');
 
 // ---------------------------------------------------------------------------
 // Start IPC server
 // ---------------------------------------------------------------------------
 
 export async function startIpcServer({ supervisor }) {
+  // Ensure runtime/ipc directory exists
+  try {
+    await fs.mkdir(RUNTIME_DIR, { recursive: true });
+  } catch {}
+
   // Remove stale socket file (UNIX only)
   if (os.platform() !== 'win32') {
     try { await fs.unlink(SOCKET_PATH); } catch {}
   }
 
-  // Ensure directory exists
-  if (os.platform() !== 'win32') {
-    const dir = path.dirname(SOCKET_PATH);
-    try { await fs.mkdir(dir, { recursive: true }); } catch {}
-  }
-
   const server = net.createServer(async (socket) => {
     socket.on('data', async (data) => {
       const cmd = data.toString().trim();
+
+      // Helper: write + end
+      const reply = (obj) => {
+        socket.write(JSON.stringify(obj));
+        socket.end();
+      };
 
       // --- state -----------------------------------------------------------
       if (cmd === 'state') {
@@ -58,23 +61,20 @@ export async function startIpcServer({ supervisor }) {
           services: raw.services || []
         };
 
-        socket.write(JSON.stringify(state));
-        return;
+        return reply(state);
       }
 
       // --- trust:list ------------------------------------------------------
       if (cmd === 'trust:list') {
         const store = supervisor.trust || { peers: [] };
-        socket.write(JSON.stringify({ peers: store.peers || [] }));
-        return;
+        return reply({ peers: store.peers || [] });
       }
 
       // --- trust:add <id> <pubkey> ----------------------------------------
       if (cmd.startsWith('trust:add ')) {
         const parts = cmd.split(' ');
         if (parts.length !== 3) {
-          socket.write(JSON.stringify({ error: 'usage: trust:add <id> <pubkey>' }));
-          return;
+          return reply({ error: 'usage: trust:add <id> <pubkey>' });
         }
 
         const id = parts[1];
@@ -89,20 +89,17 @@ export async function startIpcServer({ supervisor }) {
             addedAt: new Date().toISOString()
           });
 
-          socket.write(JSON.stringify({ ok: true }));
+          return reply({ ok: true });
         } catch (err) {
-          socket.write(JSON.stringify({ ok: false, error: err.message }));
+          return reply({ ok: false, error: err.message });
         }
-
-        return;
       }
 
       // --- trust:remove <id> ----------------------------------------------
       if (cmd.startsWith('trust:remove ')) {
         const parts = cmd.split(' ');
         if (parts.length !== 2) {
-          socket.write(JSON.stringify({ error: 'usage: trust:remove <id>' }));
-          return;
+          return reply({ error: 'usage: trust:remove <id>' });
         }
 
         const id = parts[1];
@@ -114,39 +111,160 @@ export async function startIpcServer({ supervisor }) {
           );
           const after = supervisor.trust.peers.length;
 
-          socket.write(JSON.stringify({
+          return reply({
             ok: true,
             removed: before - after
-          }));
+          });
         } catch (err) {
-          socket.write(JSON.stringify({ ok: false, error: err.message }));
+          return reply({ ok: false, error: err.message });
         }
-
-        return;
-      },
+      }
 
       // --- identity --------------------------------------------------------
       if (cmd === 'identity') {
         const id = supervisor.identity?.public || null;
         const ecdh = supervisor.ecdh?.public || null;
 
-        socket.write(JSON.stringify({
+        return reply({
           node_id: id,
           ed25519_public: id,
           x25519_public: ecdh
-        }));
-        return;
-      },
+        });
+      }
 
       // --- services --------------------------------------------------------
       if (cmd === 'services') {
         const list = supervisor.services || [];
-        socket.write(JSON.stringify({ services: list }));
-        return;
+        return reply({ services: list });
+      }
+
+      // --- router:routes ---------------------------------------------------
+      if (cmd === 'router:routes') {
+        const router = supervisor.modules?.getModule
+          ? supervisor.modules.getModule('router')
+          : null;
+
+        if (!router) {
+          return reply({ error: 'router module not available' });
+        }
+
+        try {
+          const routes = router.listRoutes();
+          return reply({ routes });
+        } catch (err) {
+          return reply({ error: err.message });
+        }
+      }
+
+      // --- router:add <peerId> <pubkey> -----------------------------------
+      if (cmd.startsWith('router:add ')) {
+        const parts = cmd.split(' ');
+        if (parts.length !== 3) {
+          return reply({ error: 'usage: router:add <peerId> <pubkey>' });
+        }
+
+        const peerId = parts[1];
+        const pubkey = parts[2];
+
+        const router = supervisor.modules?.getModule
+          ? supervisor.modules.getModule('router')
+          : null;
+
+        if (!router) {
+          return reply({ error: 'router module not available' });
+        }
+
+        try {
+          router.addRoute(peerId, pubkey);
+          return reply({ ok: true });
+        } catch (err) {
+          return reply({ ok: false, error: err.message });
+        }
+      }
+
+      // --- router:remove <peerId> -----------------------------------------
+      if (cmd.startsWith('router:remove ')) {
+        const parts = cmd.split(' ');
+        if (parts.length !== 2) {
+          return reply({ error: 'usage: router:remove <peerId>' });
+        }
+
+        const peerId = parts[1];
+
+        const router = supervisor.modules?.getModule
+          ? supervisor.modules.getModule('router')
+          : null;
+
+        if (!router) {
+          return reply({ error: 'router module not available' });
+        }
+
+        try {
+          router.removeRoute(peerId);
+          return reply({ ok: true });
+        } catch (err) {
+          return reply({ ok: false, error: err.message });
+        }
+      }
+
+      // --- router:send <peerId> <json> ------------------------------------
+      if (cmd.startsWith('router:send ')) {
+        const parts = cmd.split(' ');
+        const peerId = parts[1];
+        const json = parts.slice(2).join(' ');
+
+        if (!peerId || !json) {
+          return reply({ error: 'usage: router:send <peerId> <json>' });
+        }
+
+        const router = supervisor.modules?.getModule
+          ? supervisor.modules.getModule('router')
+          : null;
+
+        if (!router) {
+          return reply({ error: 'router module not available' });
+        }
+
+        try {
+          const payload = JSON.parse(json);
+          await router.send(peerId, payload);
+          return reply({ ok: true });
+        } catch (err) {
+          return reply({ ok: false, error: err.message });
+        }
+      }
+
+      // --- router:ping <peerId> -------------------------------------------
+      if (cmd.startsWith('router:ping ')) {
+        const parts = cmd.split(' ');
+        if (parts.length !== 2) {
+          return reply({ error: 'usage: router:ping <peerId>' });
+        }
+
+        const peerId = parts[1];
+
+        const router = supervisor.modules?.getModule
+          ? supervisor.modules.getModule('router')
+          : null;
+
+        if (!router) {
+          return reply({ error: 'router module not available' });
+        }
+
+        try {
+          await router.send(peerId, {
+            type: 'ping',
+            body: { ts: Date.now() }
+          });
+
+          return reply({ ok: true });
+        } catch (err) {
+          return reply({ ok: false, error: err.message });
+        }
       }
 
       // --- fallback --------------------------------------------------------
-      socket.write('unknown command');
+      return reply({ error: 'unknown command' });
     });
   });
 
@@ -156,3 +274,4 @@ export async function startIpcServer({ supervisor }) {
 
   return server;
 }
+

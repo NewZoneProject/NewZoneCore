@@ -1,26 +1,38 @@
 // Module: IPC Client
-// Description: Minimal IPC client for communicating with the NewZoneCore daemon.
+// Description: Cross-platform IPC client for NewZoneCore daemon.
 // File: core/cli/ipc-client.js
 
 import net from 'net';
 import os from 'os';
 import path from 'path';
+import fs from 'fs/promises';
 
-// Resolve IPC socket path (same logic as core/api/ipc.js)
+// ---------------------------------------------------------------------------
+// Universal IPC socket path (must match core/api/ipc.js)
+// ---------------------------------------------------------------------------
+
+const RUNTIME_DIR = path.join(process.cwd(), 'runtime', 'ipc');
+
 const SOCKET_PATH =
   os.platform() === 'win32'
     ? '\\\\.\\pipe\\nzcore'
-    : path.join(
-        process.env.TMPDIR || '/data/data/com.termux/files/usr/tmp',
-        'nzcore.sock'
-      );
+    : path.join(RUNTIME_DIR, 'nzcore.sock');
+
+// Ensure runtime/ipc directory exists (client-side safety)
+async function ensureRuntimeDir() {
+  try {
+    await fs.mkdir(RUNTIME_DIR, { recursive: true });
+  } catch {}
+}
 
 /**
  * Send a raw command string to the IPC server and return the response.
  * @param {string} cmd - Command to send (e.g. "state")
  * @returns {Promise<string>} - Raw response from daemon
  */
-export function sendIpcCommand(cmd) {
+export async function sendIpcCommand(cmd) {
+  await ensureRuntimeDir();
+
   return new Promise((resolve, reject) => {
     const client = net.createConnection(SOCKET_PATH);
 
