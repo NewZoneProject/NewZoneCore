@@ -1,6 +1,7 @@
 // Module: Supervisor Process Manager
 // Description: Core supervisor for NewZoneCore. Holds cryptographic identity,
-//              trust store, master key, service registry and exposes state API.
+//              trust store, master key, service registry, event bus and exposes
+//              unified state API.
 // File: core/supervisor/process.js
 
 export async function startSupervisor({ masterKey, trust, identity, ecdh }) {
@@ -22,46 +23,161 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh }) {
     services: []
   };
 
-  // Register a local microservice
+  // -------------------------------------------------------------------------
+  // Event Bus (Phase 1.1)
+  // -------------------------------------------------------------------------
+
+  const subscribers = {};   // { eventName: [handler, ...] }
+  const queue = [];         // FIFO event queue
+  let processing = false;
+
+  function subscribe(event, handler) {
+    if (!subscribers[event]) subscribers[event] = [];
+    subscribers[event].push(handler);
+  }
+
+  function unsubscribe(event, handler) {
+    if (!subscribers[event]) return;
+    subscribers[event] = subscribers[event].filter(h => h !== handler);
+  }
+
+  function emit(event, payload = {}) {
+    queue.push({ event, payload });
+    processQueue();
+  }
+
+  async function processQueue() {
+    if (processing) return;
+    processing = true;
+
+    while (queue.length > 0) {
+      const { event, payload } = queue.shift();
+      const handlers = subscribers[event] || [];
+
+      for (const h of handlers) {
+        try {
+          await h(payload);
+        } catch (err) {
+          console.log(`[eventbus] handler error for ${event}:`, err);
+        }
+      }
+    }
+
+    processing = false;
+  }
+
+  // Emit core startup event
+  emit('core:started', { startedAt: state.startedAt });
+
+  // -------------------------------------------------------------------------
+  // Service Registry (Phase 0.3)
+  // -------------------------------------------------------------------------
+
   function registerService(name, meta = {}) {
     state.services.push({
       name,
       meta,
       registeredAt: new Date().toISOString()
     });
+
+    emit('service:registered', { name, meta });
   }
 
-  // Return full supervisor state
-  async function getState() {
-    return state;
+  function getServices() {
+    return state.services;
   }
 
-  // Return node identity (public key)
+  // -------------------------------------------------------------------------
+  // Identity / Crypto
+  // -------------------------------------------------------------------------
+
   function getNodeId() {
     return state.identity?.public || null;
   }
 
-  // Return Ed25519 identity keys
   function getIdentity() {
     return state.identity;
   }
 
-  // Return X25519 ECDH keys
   function getECDH() {
     return state.ecdh;
   }
 
-  // Return trust store
-  function getTrust() {
-    return state.trust;
+  function getIdentityInfo() {
+    return {
+      node_id: state.identity?.public || null,
+      ed25519_public: state.identity?.public || null,
+      x25519_public: state.ecdh?.public || null
+    };
   }
 
+  // -------------------------------------------------------------------------
+  // Trust Store
+  // -------------------------------------------------------------------------
+
+  function getTrust() {
+    return state.trust || { peers: [] };
+  }
+
+  // -------------------------------------------------------------------------
+  // Runtime Info
+  // -------------------------------------------------------------------------
+
+  function getRuntimeInfo() {
+    const now = Date.now();
+    const started = new Date(state.startedAt).getTime();
+    return {
+      startedAt: state.startedAt,
+      uptime_ms: now - started,
+      serviceCount: state.services.length
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Unified State API
+  // -------------------------------------------------------------------------
+
+  async function getState() {
+    return {
+      startedAt: state.startedAt,
+      runtime: getRuntimeInfo(),
+      identity: getIdentityInfo(),
+      ecdh: state.ecdh,
+      trust: getTrust(),
+      services: getServices(),
+      masterKeyLoaded: state.masterKeyLoaded,
+      trustLoaded: state.trustLoaded
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API
+  // -------------------------------------------------------------------------
+
   return {
+    // event bus
+    emit,
+    subscribe,
+    unsubscribe,
+
+    // service registry
     registerService,
-    getState,
+    getServices,
+
+    // identity / crypto
     getNodeId,
     getIdentity,
     getECDH,
-    getTrust
+    getIdentityInfo,
+
+    // trust
+    getTrust,
+
+    // runtime
+    getRuntimeInfo,
+
+    // unified state
+    getState
   };
 }
+

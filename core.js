@@ -1,6 +1,7 @@
 // Module: NewZoneCore Bootstrap
 // Description: Unified entry point for NewZoneCore. Performs startup checks,
-//              initializes cryptographic identity, supervisor, HTTP and IPC APIs.
+//              initializes cryptographic identity, supervisor, HTTP and IPC APIs,
+//              loads local services and starts their lifecycle.
 // Run: nzcore start
 // File: core.js
 
@@ -81,7 +82,17 @@ export async function startCore() {
 
   console.log('[supervisor] ready');
 
-  // --- 4. HTTP API ----------------------------------------------------------
+  // --- 4. Load local services ----------------------------------------------
+  const loaderMod = await safeImport('./core/services/loader.js');
+
+  if (loaderMod?.loadLocalServices) {
+    await loaderMod.loadLocalServices({ supervisor, ROOT });
+    console.log('[services] local services loaded');
+  } else {
+    console.log('[services] no service loader found (skipped)');
+  }
+
+  // --- 5. HTTP API ----------------------------------------------------------
   const httpMod = await safeImport('./core/api/http.js');
 
   if (httpMod?.startHttpApi) {
@@ -91,7 +102,7 @@ export async function startCore() {
     console.log('[http] placeholder HTTP API started');
   }
 
-  // --- 5. IPC API -----------------------------------------------------------
+  // --- 6. IPC API -----------------------------------------------------------
   const ipcMod = await safeImport('./core/api/ipc.js');
 
   if (ipcMod?.startIpcServer) {
@@ -101,7 +112,7 @@ export async function startCore() {
     console.log('[ipc] placeholder IPC server started');
   }
 
-  // --- 6. Final state -------------------------------------------------------
+  // --- 7. Final state -------------------------------------------------------
   console.log('[NewZoneCore] online.');
 }
 
@@ -112,3 +123,4 @@ if (import.meta.main) {
     process.exit(1);
   });
 }
+

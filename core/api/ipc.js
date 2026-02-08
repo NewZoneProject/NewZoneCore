@@ -62,6 +62,89 @@ export async function startIpcServer({ supervisor }) {
         return;
       }
 
+      // --- trust:list ------------------------------------------------------
+      if (cmd === 'trust:list') {
+        const store = supervisor.trust || { peers: [] };
+        socket.write(JSON.stringify({ peers: store.peers || [] }));
+        return;
+      }
+
+      // --- trust:add <id> <pubkey> ----------------------------------------
+      if (cmd.startsWith('trust:add ')) {
+        const parts = cmd.split(' ');
+        if (parts.length !== 3) {
+          socket.write(JSON.stringify({ error: 'usage: trust:add <id> <pubkey>' }));
+          return;
+        }
+
+        const id = parts[1];
+        const pubkey = parts[2];
+
+        try {
+          if (!supervisor.trust.peers) supervisor.trust.peers = [];
+
+          supervisor.trust.peers.push({
+            id,
+            pubkey,
+            addedAt: new Date().toISOString()
+          });
+
+          socket.write(JSON.stringify({ ok: true }));
+        } catch (err) {
+          socket.write(JSON.stringify({ ok: false, error: err.message }));
+        }
+
+        return;
+      }
+
+      // --- trust:remove <id> ----------------------------------------------
+      if (cmd.startsWith('trust:remove ')) {
+        const parts = cmd.split(' ');
+        if (parts.length !== 2) {
+          socket.write(JSON.stringify({ error: 'usage: trust:remove <id>' }));
+          return;
+        }
+
+        const id = parts[1];
+
+        try {
+          const before = supervisor.trust.peers?.length || 0;
+          supervisor.trust.peers = (supervisor.trust.peers || []).filter(
+            (p) => p.id !== id
+          );
+          const after = supervisor.trust.peers.length;
+
+          socket.write(JSON.stringify({
+            ok: true,
+            removed: before - after
+          }));
+        } catch (err) {
+          socket.write(JSON.stringify({ ok: false, error: err.message }));
+        }
+
+        return;
+      },
+
+      // --- identity --------------------------------------------------------
+      if (cmd === 'identity') {
+        const id = supervisor.identity?.public || null;
+        const ecdh = supervisor.ecdh?.public || null;
+
+        socket.write(JSON.stringify({
+          node_id: id,
+          ed25519_public: id,
+          x25519_public: ecdh
+        }));
+        return;
+      },
+
+      // --- services --------------------------------------------------------
+      if (cmd === 'services') {
+        const list = supervisor.services || [];
+        socket.write(JSON.stringify({ services: list }));
+        return;
+      }
+
       // --- fallback --------------------------------------------------------
       socket.write('unknown command');
     });
