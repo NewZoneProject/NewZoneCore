@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Delegation Document",
+  "type": "object",
+  "required": ["type","version","id","issuer","subject","rights","constraints","proof"],
+  "properties": {
+    "type": { "const": "delegation" },
+    "version": { "type": "string" },
+    "id": { "type": "string" },
+    "issuer": {
+      "type": "object",
+      "required": ["key_id","signature"],
+      "properties": {
+        "key_id": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["key_id"],
+      "properties": {
+        "key_id": { "type": "string" }
+      }
+    },
+    "rights": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "not_before": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "required": ["algo","hash","signature"],
+      "properties": {
+        "algo": { "type": "string" },
+        "hash": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}
