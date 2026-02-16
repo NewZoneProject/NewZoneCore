@@ -1,209 +1,336 @@
 // Module: Supervisor Process Manager
 // Description: Core supervisor for NewZoneCore. Holds cryptographic identity,
 //              trust store, master key, service registry, event bus and exposes
-//              unified state API.
+//              unified state API. Now with full lifecycle and channel support.
 // File: core/supervisor/process.js
 
-export async function startSupervisor({ masterKey, trust, identity, ecdh }) {
+import { EventBus, EventTypes, getEventBus } from '../eventbus/index.js';
+import { ServiceManager, ServiceState, getServiceManager } from '../lifecycle/manager.js';
+import { Identity, IdentityManager } from '../identity/unified.js';
+import { ChannelManager, getChannelManager } from '../channel/manager.js';
+
+// ============================================================================
+// SUPERVISOR
+// ============================================================================
+
+export async function startSupervisor({ masterKey, trust, identity, ecdh, envPath }) {
+  // Initialize event bus
+  const eventBus = getEventBus();
+  
+  // Internal state
   const state = {
     startedAt: new Date().toISOString(),
-
-    // --- Cryptographic identity -------------------------------------------
-    identity: identity || null,   // { seed, public }
-    ecdh: ecdh || null,           // { private, public }
-
-    // --- Master key & trust store -----------------------------------------
+    
+    // Cryptographic identity
+    identity: identity || null,
+    ecdh: ecdh || null,
+    
+    // Master key & trust store
     masterKeyLoaded: Boolean(masterKey),
     masterKey: masterKey || null,
-
     trustLoaded: Boolean(trust),
     trust: trust || { peers: [] },
-
-    // --- Local services ----------------------------------------------------
+    
+    // Services (legacy, will be migrated to ServiceManager)
     services: []
   };
-
-  // -------------------------------------------------------------------------
-  // Event Bus (Phase 1.1)
-  // -------------------------------------------------------------------------
-
-  const subscribers = {};   // { eventName: [handler, ...] }
-  const queue = [];         // FIFO event queue
-  let processing = false;
-
-  function subscribe(event, handler) {
-    if (!subscribers[event]) subscribers[event] = [];
-    subscribers[event].push(handler);
+  
+  // =========================================================================
+  // EVENT BUS
+  // =========================================================================
+  
+  // Log all events in debug mode
+  if (process.env.NZCORE_DEBUG === 'true') {
+    eventBus.subscribe('*', (event) => {
+      console.log(`[event] ${event.type}`, event.payload);
+    });
   }
-
-  function unsubscribe(event, handler) {
-    if (!subscribers[event]) return;
-    subscribers[event] = subscribers[event].filter(h => h !== handler);
-  }
-
-  function emit(event, payload = {}) {
-    queue.push({ event, payload });
-    processQueue();
-  }
-
-  async function processQueue() {
-    if (processing) return;
-    processing = true;
-
-    while (queue.length > 0) {
-      const { event, payload } = queue.shift();
-      const handlers = subscribers[event] || [];
-
-      for (const h of handlers) {
-        try {
-          await h(payload);
-        } catch (err) {
-          console.log(`[eventbus] handler error for ${event}:`, err);
-        }
-      }
+  
+  // Emit core started event
+  eventBus.emit(EventTypes.CORE_STARTED, {
+    startedAt: state.startedAt,
+    version: '1.0.0'
+  });
+  
+  // =========================================================================
+  // SERVICE MANAGER
+  // =========================================================================
+  
+  const serviceManager = getServiceManager();
+  
+  // Sync legacy services array with ServiceManager
+  const syncServices = () => {
+    const status = serviceManager.getStatus();
+    state.services = Object.entries(status.services).map(([name, svc]) => ({
+      name,
+      meta: svc.metadata || {},
+      status: svc.state,
+      registeredAt: svc.startTime || svc.createdAt
+    }));
+  };
+  
+  // Subscribe to service events
+  eventBus.subscribe(EventTypes.SERVICE_REGISTERED, ({ service, metadata }) => {
+    state.services.push({
+      name: service,
+      meta: metadata || {},
+      status: ServiceState.READY,
+      registeredAt: new Date().toISOString()
+    });
+  });
+  
+  eventBus.subscribe(EventTypes.SERVICE_STARTED, ({ service, startTime }) => {
+    const svc = state.services.find(s => s.name === service);
+    if (svc) {
+      svc.status = ServiceState.RUNNING;
+      svc.startedAt = startTime;
     }
-
-    processing = false;
+  });
+  
+  eventBus.subscribe(EventTypes.SERVICE_STOPPED, ({ service }) => {
+    const svc = state.services.find(s => s.name === service);
+    if (svc) {
+      svc.status = ServiceState.STOPPED;
+    }
+  });
+  
+  // =========================================================================
+  // MODULE REGISTRY
+  // =========================================================================
+  
+  const moduleStore = {};
+  
+  function registerModule(name, instance) {
+    moduleStore[name] = instance;
+    eventBus.emit(EventTypes.MODULE_LOADED, { name, module: instance });
   }
-
-  // Emit core startup event
-  emit('core:started', { startedAt: state.startedAt });
-
-  // -------------------------------------------------------------------------
-  // Service Registry (Phase 0.3)
-  // -------------------------------------------------------------------------
-
+  
+  function getModule(name) {
+    return moduleStore[name] || null;
+  }
+  
+  function listModules() {
+    return Object.keys(moduleStore);
+  }
+  
+  // =========================================================================
+  // IDENTITY MANAGER
+  // =========================================================================
+  
+  let identityManager = null;
+  let unifiedIdentity = null;
+  
+  if (identity && ecdh) {
+    unifiedIdentity = new Identity({
+      ed25519: identity,
+      x25519: ecdh,
+      masterKey
+    });
+  }
+  
+  // =========================================================================
+  // CHANNEL MANAGER
+  // =========================================================================
+  
+  const channelManager = getChannelManager({
+    identity: unifiedIdentity
+  });
+  
+  // =========================================================================
+  // TRUST STORE
+  // =========================================================================
+  
+  function getTrust() {
+    return state.trust || { peers: [] };
+  }
+  
+  function addPeer(id, pubkey) {
+    if (!state.trust.peers) {
+      state.trust.peers = [];
+    }
+    
+    // Check for duplicate
+    const existing = state.trust.peers.find(p => p.id === id);
+    if (existing) {
+      return { success: false, error: 'Peer already exists' };
+    }
+    
+    state.trust.peers.push({
+      id,
+      pubkey,
+      addedAt: new Date().toISOString()
+    });
+    
+    eventBus.emit(EventTypes.TRUST_PEER_ADDED, { id, pubkey });
+    
+    return { success: true, id };
+  }
+  
+  function removePeer(id) {
+    if (!state.trust.peers) {
+      return { success: false, error: 'No peers' };
+    }
+    
+    const index = state.trust.peers.findIndex(p => p.id === id);
+    if (index === -1) {
+      return { success: false, error: 'Peer not found' };
+    }
+    
+    state.trust.peers.splice(index, 1);
+    eventBus.emit(EventTypes.TRUST_PEER_REMOVED, { id });
+    
+    return { success: true, id };
+  }
+  
+  // =========================================================================
+  // IDENTITY / CRYPTO
+  // =========================================================================
+  
+  function getNodeId() {
+    return unifiedIdentity?.getNodeId() || state.identity?.public || null;
+  }
+  
+  function getIdentity() {
+    return state.identity;
+  }
+  
+  function getECDH() {
+    return state.ecdh;
+  }
+  
+  function getIdentityInfo() {
+    return {
+      node_id: getNodeId(),
+      ed25519_public: state.identity?.public || null,
+      x25519_public: state.ecdh?.public || null
+    };
+  }
+  
+  // =========================================================================
+  // RUNTIME INFO
+  // =========================================================================
+  
+  function getRuntimeInfo() {
+    const now = Date.now();
+    const started = new Date(state.startedAt).getTime();
+    const serviceStatus = serviceManager.getStatus();
+    
+    return {
+      startedAt: state.startedAt,
+      uptime_ms: now - started,
+      serviceCount: state.services.length,
+      servicesRunning: serviceStatus.running,
+      servicesStopped: serviceStatus.stopped,
+      channelCount: channelManager.list().length,
+      eventStats: eventBus.getStats()
+    };
+  }
+  
+  // =========================================================================
+  // SERVICE REGISTRY (legacy support)
+  // =========================================================================
+  
   function registerService(name, meta = {}) {
+    // Register with ServiceManager
+    serviceManager.register(name, {
+      metadata: meta,
+      autoStart: false
+    });
+    
+    // Also update legacy array
     state.services.push({
       name,
       meta,
       registeredAt: new Date().toISOString()
     });
-
-    emit('service:registered', { name, meta });
+    
+    eventBus.emit(EventTypes.SERVICE_REGISTERED, { name, meta });
   }
-
+  
   function getServices() {
     return state.services;
   }
-
-  // -------------------------------------------------------------------------
-  // Module Registry (Phase 2.0)
-  // -------------------------------------------------------------------------
-
-  const moduleStore = {}; // { name: moduleInstance }
-
-  function registerModule(name, instance) {
-    moduleStore[name] = instance;
-    emit('module:registered', { name });
-  }
-
-  function getModule(name) {
-    return moduleStore[name] || null;
-  }
-
-  function listModules() {
-    return Object.keys(moduleStore);
-  }
-
-  // -------------------------------------------------------------------------
-  // Identity / Crypto
-  // -------------------------------------------------------------------------
-
-  function getNodeId() {
-    return state.identity?.public || null;
-  }
-
-  function getIdentity() {
-    return state.identity;
-  }
-
-  function getECDH() {
-    return state.ecdh;
-  }
-
-  function getIdentityInfo() {
-    return {
-      node_id: state.identity?.public || null,
-      ed25519_public: state.identity?.public || null,
-      x25519_public: state.ecdh?.public || null
-    };
-  }
-
-  // -------------------------------------------------------------------------
-  // Trust Store
-  // -------------------------------------------------------------------------
-
-  function getTrust() {
-    return state.trust || { peers: [] };
-  }
-
-  // -------------------------------------------------------------------------
-  // Runtime Info
-  // -------------------------------------------------------------------------
-
-  function getRuntimeInfo() {
-    const now = Date.now();
-    const started = new Date(state.startedAt).getTime();
-    return {
-      startedAt: state.startedAt,
-      uptime_ms: now - started,
-      serviceCount: state.services.length
-    };
-  }
-
-  // -------------------------------------------------------------------------
-  // Unified State API
-  // -------------------------------------------------------------------------
-
+  
+  // =========================================================================
+  // UNIFIED STATE API
+  // =========================================================================
+  
   async function getState() {
+    const serviceStatus = serviceManager.getStatus();
+    const channelStatus = channelManager.getStatus();
+    
     return {
       startedAt: state.startedAt,
       runtime: getRuntimeInfo(),
       identity: getIdentityInfo(),
       ecdh: state.ecdh,
       trust: getTrust(),
-      services: getServices(),
+      services: state.services,
+      serviceStats: {
+        total: serviceStatus.total,
+        running: serviceStatus.running,
+        stopped: serviceStatus.stopped
+      },
+      channels: {
+        total: channelStatus.total,
+        open: channelStatus.open
+      },
       masterKeyLoaded: state.masterKeyLoaded,
       trustLoaded: state.trustLoaded
     };
   }
-
-  // -------------------------------------------------------------------------
-  // Public API
-  // -------------------------------------------------------------------------
-
+  
+  // =========================================================================
+  // PUBLIC API
+  // =========================================================================
+  
   return {
-    // event bus
-    emit,
-    subscribe,
-    unsubscribe,
-
-    // service registry
+    // Event bus
+    eventBus,
+    emit: eventBus.emit.bind(eventBus),
+    subscribe: eventBus.subscribe.bind(eventBus),
+    unsubscribe: eventBus.unsubscribe.bind(eventBus),
+    
+    // Service manager
+    serviceManager,
     registerService,
     getServices,
-
-    // module registry
+    
+    // Service lifecycle
+    startService: (name, context) => serviceManager.start(name, context),
+    stopService: (name, reason) => serviceManager.stop(name, reason),
+    restartService: (name, reason) => serviceManager.restart(name, reason),
+    getServiceStatus: () => serviceManager.getStatus(),
+    
+    // Module registry
     modules: {
       registerModule,
       getModule,
       listModules
     },
-
-    // identity / crypto
+    
+    // Identity
+    identity: unifiedIdentity,
     getNodeId,
     getIdentity,
     getECDH,
     getIdentityInfo,
-
-    // trust
+    
+    // Trust
     getTrust,
-
-    // runtime
+    addPeer,
+    removePeer,
+    
+    // Channels
+    channelManager,
+    openChannel: (peerId, options) => channelManager.open(peerId, options),
+    closeChannel: (peerId, reason) => channelManager.close(peerId, reason),
+    getChannelStatus: () => channelManager.getStatus(),
+    
+    // Runtime
     getRuntimeInfo,
-
-    // unified state
+    
+    // Unified state
     getState
   };
 }
-

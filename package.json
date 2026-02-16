@@ -7,5 +7,16 @@
     "nzcore": "./bin/nzcore"
   },
   "type": "module",
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "start": "node core.js",
+    "test": "node tests/security.test.js",
+    "lint": "eslint core/**/*.js tests/**/*.js --fix"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
