@@ -1,7 +1,7 @@
 {
   "name": "nzcore",
-  "version": "0.1.0",
-  "description": "NewZoneCore is an autonomous trust and process core.",
+  "version": "0.2.0",
+  "description": "NewZoneCore is an autonomous trust kernel for distributed systems.",
   "main": "core.js",
   "bin": {
     "nzcore": "./bin/nzcore"
@@ -10,13 +10,38 @@
   "license": "MIT",
   "scripts": {
     "start": "node core.js",
-    "test": "node tests/security.test.js",
-    "lint": "eslint core/**/*.js tests/**/*.js --fix"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:security": "node tests/security.test.js",
+    "lint": "eslint core/**/*.js network/**/*.js tests/**/*.js --fix"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "eslint": "^9.0.0"
+    "eslint": "^9.0.0",
+    "vitest": "^3.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "trust",
+    "distributed",
+    "p2p",
+    "kademlia",
+    "dht",
+    "network",
+    "security",
+    "autonomous"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NewZoneProject/NewZoneCore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NewZoneProject/NewZoneCore/issues"
+  },
+  "homepage": "https://github.com/NewZoneProject/NewZoneCore#readme"
 }
