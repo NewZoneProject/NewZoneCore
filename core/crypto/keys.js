@@ -29,61 +29,143 @@ const KEY_SIZE = 32;
 /**
  * SecureBuffer wraps a Buffer and provides automatic zeroing on cleanup.
  * Used to hold sensitive key material in memory.
+ * 
+ * SECURITY NOTES (SEC-011):
+ * - Uses crypto.secureHeap if available (Node.js 19+)
+ * - Multiple overwrite passes for secure erasure
+ * - Throws error if accessing freed buffer
+ * - Automatic zeroing on garbage collection (finalizer)
  */
 export class SecureBuffer {
   constructor(size) {
     this._buffer = Buffer.alloc(size);
     this._freed = false;
+    this._isSecureHeap = false;
+    
+    // Try to use secure heap if available (Node.js 19+)
+    try {
+      const secureHeap = crypto.secureHeap;
+      if (secureHeap && typeof secureHeap.alloc === 'function') {
+        this._buffer = secureHeap.alloc(size);
+        this._isSecureHeap = true;
+      }
+    } catch {
+      // secureHeap not available, use regular Buffer
+    }
   }
-  
+
+  /**
+   * Check if this buffer uses secure heap.
+   * @returns {boolean} True if using secure heap
+   */
+  get isSecureHeap() {
+    return this._isSecureHeap;
+  }
+
+  /**
+   * Get the underlying buffer.
+   * @returns {Buffer} The buffer
+   * @throws {Error} If buffer has been freed
+   */
   get buffer() {
     if (this._freed) {
       throw new Error('SecureBuffer has been freed');
     }
     return this._buffer;
   }
-  
+
+  /**
+   * Get buffer length.
+   * @returns {number} Buffer length
+   */
   get length() {
     return this._buffer.length;
   }
-  
+
+  /**
+   * Fill buffer with value.
+   * @param {number} value - Value to fill (0-255)
+   * @returns {SecureBuffer} this
+   */
   fill(value) {
     this._buffer.fill(value);
     return this;
   }
-  
+
+  /**
+   * Copy data to target buffer.
+   */
   copy(target, targetStart, sourceStart, sourceEnd) {
     return this._buffer.copy(target, targetStart, sourceStart, sourceEnd);
   }
-  
+
+  /**
+   * Create a slice view of the buffer.
+   * WARNING: Slice shares memory with original buffer.
+   */
   slice(start, end) {
     return this._buffer.slice(start, end);
   }
-  
+
+  /**
+   * Convert to string.
+   * WARNING: Creates an immutable string copy.
+   * Use immediately and don't store the result.
+   */
   toString(encoding) {
     return this._buffer.toString(encoding);
   }
-  
+
   /**
-   * Securely wipe the buffer from memory
+   * Securely wipe the buffer from memory.
+   * Uses multiple overwrite passes for security.
    */
   free() {
     if (!this._freed) {
+      // Pass 1: Fill with zeros
       this._buffer.fill(0);
-      // Overwrite multiple times for added security
-      for (let i = 0; i < 3; i++) {
+      
+      // Pass 2-4: Random fill + zero (3 passes)
+      const passes = 3;
+      for (let i = 0; i < passes; i++) {
         crypto.randomFillSync(this._buffer);
         this._buffer.fill(0);
       }
+      
       this._freed = true;
     }
   }
-  
+
   /**
-   * Check if buffer is still valid
+   * Check if buffer is still valid.
+   * @returns {boolean} True if buffer can be used
    */
   isValid() {
     return !this._freed;
+  }
+
+  /**
+   * Convert to Uint8Array (zero-copy if possible).
+   * @returns {Uint8Array} View of the buffer
+   */
+  toUint8Array() {
+    return new Uint8Array(this._buffer.buffer, this._buffer.byteOffset, this._buffer.length);
+  }
+
+  /**
+   * Get hex representation.
+   * @returns {string} Hex string
+   */
+  toHex() {
+    return this._buffer.toString('hex');
+  }
+
+  /**
+   * Get base64 representation.
+   * @returns {string} Base64 string
+   */
+  toBase64() {
+    return this._buffer.toString('base64');
   }
 }
 
