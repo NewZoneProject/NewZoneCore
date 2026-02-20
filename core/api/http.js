@@ -4,15 +4,26 @@
 
 import http from 'http';
 import { URL } from 'url';
+import {
+  validatePeerId,
+  validateEd25519PublicKey,
+  validateJsonPayload,
+  validatePassword
+} from '../utils/validator.js';
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
 const DEFAULT_PORT = 3000;
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : ['http://localhost:3000', 'http://127.0.0.1:3000'];
+
+// Rate limiting for login attempts
+const loginAttempts = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
 
 // ============================================================================
 // HTTP API SERVER
@@ -131,49 +142,134 @@ export async function startHttpApi({ supervisor, authManager }) {
 // AUTH HANDLERS
 // ============================================================================
 
+/**
+ * Check rate limit for login attempts.
+ */
+function checkLoginRateLimit(ip) {
+  const now = Date.now();
+  const attempts = loginAttempts.get(ip);
+
+  if (!attempts) {
+    return { allowed: true };
+  }
+
+  // Check if locked
+  if (attempts.lockedUntil && now < attempts.lockedUntil) {
+    const remaining = Math.ceil((attempts.lockedUntil - now) / 60000);
+    return {
+      allowed: false,
+      error: `Too many login attempts. Try again in ${remaining} minutes.`
+    };
+  }
+
+  // Reset if window expired
+  if (now - attempts.firstAttempt > LOCKOUT_DURATION) {
+    loginAttempts.delete(ip);
+    return { allowed: true };
+  }
+
+  // Check if max attempts exceeded
+  if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+    attempts.lockedUntil = now + LOCKOUT_DURATION;
+    loginAttempts.set(ip, attempts);
+    return {
+      allowed: false,
+      error: 'Too many login attempts. Account locked for 15 minutes.'
+    };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Record failed login attempt.
+ */
+function recordFailedLogin(ip) {
+  const now = Date.now();
+  let attempts = loginAttempts.get(ip);
+
+  if (!attempts) {
+    attempts = { count: 0, firstAttempt: now };
+  }
+
+  attempts.count++;
+  attempts.firstAttempt = now;
+  loginAttempts.set(ip, attempts);
+}
+
+/**
+ * Clear failed login attempts on success.
+ */
+function clearFailedLogin(ip) {
+  loginAttempts.delete(ip);
+}
+
 async function validateAuth(req, authManager) {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader) {
     return { valid: false, error: 'Authorization required' };
   }
-  
+
   // Bearer token
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
   if (match) {
     return authManager.validateToken(match[1]);
   }
-  
+
   // API key
   const keyMatch = authHeader.match(/^ApiKey\s+(.+)$/i);
   if (keyMatch) {
     return authManager.validateApiKey(keyMatch[1]);
   }
-  
+
   return { valid: false, error: 'Invalid authorization format' };
 }
 
 async function handleLogin(req, res, authManager) {
+  const clientIp = req.socket.remoteAddress || 'unknown';
+
   try {
+    // Check rate limit first
+    const rateLimit = checkLoginRateLimit(clientIp);
+    if (!rateLimit.allowed) {
+      recordFailedLogin(clientIp);
+      res.writeHead(429);
+      return res.end(JSON.stringify({ error: rateLimit.error }));
+    }
+
     const body = await readBody(req);
     const { password } = JSON.parse(body);
-    
-    if (!password) {
+
+    // Validate password
+    try {
+      validatePassword(password, {
+        minLength: 8,
+        maxLength: 128,
+        requireUppercase: false, // Allow flexible passwords
+        requireLowercase: false,
+        requireNumbers: false,
+        requireSymbols: false
+      });
+    } catch (error) {
+      recordFailedLogin(clientIp);
       res.writeHead(400);
-      return res.end(JSON.stringify({ error: 'Password required' }));
+      return res.end(JSON.stringify({ error: error.message }));
     }
-    
-    const clientIp = req.socket.remoteAddress;
+
     const result = await authManager.login(password, clientIp);
-    
+
     if (result.success) {
+      clearFailedLogin(clientIp);
       res.writeHead(200);
       res.end(JSON.stringify(result));
     } else {
+      recordFailedLogin(clientIp);
       res.writeHead(401);
       res.end(JSON.stringify({ error: result.error }));
     }
   } catch (error) {
+    recordFailedLogin(clientIp);
     res.writeHead(500);
     res.end(JSON.stringify({ error: 'Internal server error' }));
   }
@@ -242,33 +338,41 @@ async function handleTrustList(req, res, supervisor) {
 
 async function handleTrustAdd(req, res, supervisor) {
   try {
+    // Validate payload size first
+    const contentLength = parseInt(req.headers['content-length'] || '0', 10);
+    if (contentLength > 1024 * 1024) { // 1MB max
+      res.writeHead(413);
+      return res.end(JSON.stringify({ error: 'Payload too large' }));
+    }
+
     const body = await readBody(req);
-    const { id, pubkey } = JSON.parse(body);
-    
-    // Validate inputs
-    if (!id || typeof id !== 'string') {
-      res.writeHead(400);
-      return res.end(JSON.stringify({ error: 'Valid peer ID required' }));
-    }
-    
-    // Validate public key format (base64, 32 bytes)
-    if (!pubkey || typeof pubkey !== 'string') {
-      res.writeHead(400);
-      return res.end(JSON.stringify({ error: 'Public key required' }));
-    }
-    
-    // Validate base64 format
+
+    // Validate JSON size
     try {
-      const keyBytes = Buffer.from(pubkey, 'base64');
-      if (keyBytes.length !== 32) {
-        res.writeHead(400);
-        return res.end(JSON.stringify({ error: 'Public key must be 32 bytes (Ed25519)' }));
-      }
-    } catch {
-      res.writeHead(400);
-      return res.end(JSON.stringify({ error: 'Invalid base64 encoding for public key' }));
+      validateJsonPayload(body, 10 * 1024); // 10KB max for trust add
+    } catch (error) {
+      res.writeHead(413);
+      return res.end(JSON.stringify({ error: error.message }));
     }
-    
+
+    const { id, pubkey } = JSON.parse(body);
+
+    // Validate peer ID using validator
+    try {
+      validatePeerId(id);
+    } catch (error) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: `Invalid peer ID: ${error.message}` }));
+    }
+
+    // Validate public key using validator
+    try {
+      validateEd25519PublicKey(pubkey);
+    } catch (error) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: `Invalid public key: ${error.message}` }));
+    }
+
     if (!supervisor.trust.peers) supervisor.trust.peers = [];
 
     supervisor.trust.peers.push({
@@ -278,8 +382,12 @@ async function handleTrustAdd(req, res, supervisor) {
     });
 
     res.writeHead(200);
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ok: true, id }));
   } catch (error) {
+    if (error instanceof SyntaxError) {
+      res.writeHead(400);
+      return res.end(JSON.stringify({ error: 'Invalid JSON' }));
+    }
     res.writeHead(500);
     res.end(JSON.stringify({ error: error.message }));
   }
@@ -287,10 +395,13 @@ async function handleTrustAdd(req, res, supervisor) {
 
 async function handleTrustRemove(req, res, supervisor, url) {
   const id = url.searchParams.get('id');
-  
-  if (!id) {
+
+  // Validate peer ID
+  try {
+    validatePeerId(id);
+  } catch (error) {
     res.writeHead(400);
-    return res.end(JSON.stringify({ error: 'Peer ID required' }));
+    return res.end(JSON.stringify({ error: `Invalid peer ID: ${error.message}` }));
   }
 
   const before = supervisor.trust.peers?.length || 0;
@@ -300,9 +411,9 @@ async function handleTrustRemove(req, res, supervisor, url) {
   const after = supervisor.trust.peers.length;
 
   res.writeHead(200);
-  res.end(JSON.stringify({ 
-    ok: true, 
-    removed: before - after 
+  res.end(JSON.stringify({
+    ok: true,
+    removed: before - after
   }));
 }
 

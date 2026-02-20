@@ -8,6 +8,12 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
+import {
+  validatePeerId,
+  validateEd25519PublicKey,
+  validateMessageSize,
+  sanitizeString
+} from '../utils/validator.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -20,6 +26,13 @@ const SOCKET_PATH =
   os.platform() === 'win32'
     ? '\\\\.\\pipe\\nzcore'
     : path.join(RUNTIME_DIR, 'nzcore.sock');
+
+// Rate limiting configuration
+const RATE_LIMIT_MAX_ATTEMPTS = 5;
+const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+// Rate limiting state
+const authAttempts = new Map(); // IP -> { count, firstAttempt, lockedUntil }
 
 // ============================================================================
 // IPC AUTHENTICATION
@@ -54,15 +67,86 @@ async function loadIpcToken() {
 }
 
 /**
- * Validate IPC token.
+ * Validate IPC token with constant-time comparison.
+ * SECURITY: Uses timing-safe comparison to prevent timing attacks.
  */
 function validateIpcToken(providedToken, expectedToken) {
-  if (!providedToken || !expectedToken) return false;
-  
-  return crypto.timingSafeEqual(
-    Buffer.from(providedToken, 'utf8'),
-    Buffer.from(expectedToken, 'utf8')
-  );
+  if (!providedToken || !expectedToken) {
+    // Constant-time return to prevent timing analysis
+    crypto.randomBytes(1);
+    return false;
+  }
+
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(String(providedToken), 'utf8'),
+      Buffer.from(String(expectedToken), 'utf8')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check rate limit for authentication attempts.
+ */
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const attempts = authAttempts.get(ip);
+
+  if (!attempts) {
+    return { allowed: true };
+  }
+
+  // Check if locked
+  if (attempts.lockedUntil && now < attempts.lockedUntil) {
+    const remaining = Math.ceil((attempts.lockedUntil - now) / 60000);
+    return {
+      allowed: false,
+      error: `Too many failed attempts. Try again in ${remaining} minutes.`
+    };
+  }
+
+  // Reset if window expired
+  if (now - attempts.firstAttempt > RATE_LIMIT_WINDOW_MS) {
+    authAttempts.delete(ip);
+    return { allowed: true };
+  }
+
+  // Check if max attempts exceeded
+  if (attempts.count >= RATE_LIMIT_MAX_ATTEMPTS) {
+    attempts.lockedUntil = now + RATE_LIMIT_WINDOW_MS;
+    authAttempts.set(ip, attempts);
+    return {
+      allowed: false,
+      error: 'Too many failed attempts. Account locked for 15 minutes.'
+    };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Record failed authentication attempt.
+ */
+function recordFailedAttempt(ip) {
+  const now = Date.now();
+  let attempts = authAttempts.get(ip);
+
+  if (!attempts) {
+    attempts = { count: 0, firstAttempt: now };
+  }
+
+  attempts.count++;
+  attempts.firstAttempt = now;
+  authAttempts.set(ip, attempts);
+}
+
+/**
+ * Clear failed attempts on successful authentication.
+ */
+function clearFailedAttempts(ip) {
+  authAttempts.delete(ip);
 }
 
 // ============================================================================
@@ -140,27 +224,44 @@ export async function startIpcServer({ supervisor, authManager }) {
 
 async function processCommand(line, supervisor, isAuthenticated, ipcToken, authManager) {
   const cmd = line.trim();
-  
+  const remoteAddress = 'ipc'; // IPC connections don't have remote IP
+
   // Helper: write + end
   const reply = (obj) => ({ response: obj });
   const close = () => ({ close: true });
-  
-  // --- Authentication command -----------------------------------------------
+
+  // --- Authentication command with rate limiting ----------------------------
   if (cmd.startsWith('AUTH ')) {
     const token = cmd.substring(5).trim();
-    
+
+    // Check rate limit
+    const rateLimit = checkRateLimit(remoteAddress);
+    if (!rateLimit.allowed) {
+      recordFailedAttempt(remoteAddress);
+      return reply({ error: rateLimit.error });
+    }
+
+    // Validate token format before comparison
+    if (!token || typeof token !== 'string' || token.length !== 64) {
+      recordFailedAttempt(remoteAddress);
+      return reply({ error: 'Invalid token format' });
+    }
+
+    // Constant-time validation
     if (validateIpcToken(token, ipcToken)) {
+      clearFailedAttempts(remoteAddress);
       return { authenticated: true, response: { ok: true, message: 'Authenticated' } };
     }
-    
+
+    recordFailedAttempt(remoteAddress);
     return reply({ error: 'Authentication failed' });
   }
-  
+
   // --- Require authentication for all other commands -----------------------
   if (!isAuthenticated) {
     return reply({ error: 'Authentication required. Send: AUTH <token>' });
   }
-  
+
   // --- State ---------------------------------------------------------------
   if (cmd === 'state') {
     let raw = {};
@@ -188,29 +289,29 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
     return reply({ peers: store.peers || [] });
   }
 
-  // --- Trust add with validation --------------------------------------------
+  // --- Trust add with strict validation ------------------------------------
   if (cmd.startsWith('trust:add ')) {
     const parts = cmd.split(' ');
     if (parts.length !== 3) {
-      return reply({ error: 'usage: trust:add <id> <pubkey>' });
+      return reply({ error: 'Usage: trust:add <id> <pubkey>' });
     }
 
-    const id = parts[1];
-    const pubkey = parts[2];
-    
-    // Validate ID
-    if (!id || typeof id !== 'string' || id.length > 256) {
-      return reply({ error: 'Invalid peer ID' });
-    }
-    
-    // Validate public key (base64, 32 bytes)
+    // Sanitize inputs
+    const id = sanitizeString(parts[1]);
+    const pubkey = sanitizeString(parts[2]);
+
+    // Validate peer ID using validator
     try {
-      const keyBytes = Buffer.from(pubkey, 'base64');
-      if (keyBytes.length !== 32) {
-        return reply({ error: 'Public key must be 32 bytes (Ed25519)' });
-      }
-    } catch {
-      return reply({ error: 'Invalid base64 encoding for public key' });
+      validatePeerId(id);
+    } catch (error) {
+      return reply({ error: `Invalid peer ID: ${error.message}` });
+    }
+
+    // Validate public key using validator
+    try {
+      validateEd25519PublicKey(pubkey);
+    } catch (error) {
+      return reply({ error: `Invalid public key: ${error.message}` });
     }
 
     try {
@@ -222,20 +323,27 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
         addedAt: new Date().toISOString()
       });
 
-      return reply({ ok: true });
+      return reply({ ok: true, id });
     } catch (err) {
       return reply({ ok: false, error: err.message });
     }
   }
 
-  // --- Trust remove --------------------------------------------------------
+  // --- Trust remove with validation ----------------------------------------
   if (cmd.startsWith('trust:remove ')) {
     const parts = cmd.split(' ');
     if (parts.length !== 2) {
-      return reply({ error: 'usage: trust:remove <id>' });
+      return reply({ error: 'Usage: trust:remove <id>' });
     }
 
-    const id = parts[1];
+    const id = sanitizeString(parts[1]);
+
+    // Validate peer ID
+    try {
+      validatePeerId(id);
+    } catch (error) {
+      return reply({ error: `Invalid peer ID: ${error.message}` });
+    }
 
     try {
       const before = supervisor.trust.peers?.length || 0;
@@ -293,25 +401,24 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
   if (cmd.startsWith('router:add ')) {
     const parts = cmd.split(' ');
     if (parts.length !== 3) {
-      return reply({ error: 'usage: router:add <peerId> <pubkey>' });
+      return reply({ error: 'Usage: router:add <peerId> <pubkey>' });
     }
 
-    const peerId = parts[1];
-    const pubkey = parts[2];
-    
+    const peerId = sanitizeString(parts[1]);
+    const pubkey = sanitizeString(parts[2]);
+
     // Validate peer ID
-    if (!peerId || typeof peerId !== 'string') {
-      return reply({ error: 'Invalid peer ID' });
+    try {
+      validatePeerId(peerId);
+    } catch (error) {
+      return reply({ error: `Invalid peer ID: ${error.message}` });
     }
-    
+
     // Validate public key
     try {
-      const keyBytes = Buffer.from(pubkey, 'base64');
-      if (keyBytes.length !== 32) {
-        return reply({ error: 'Public key must be 32 bytes' });
-      }
-    } catch {
-      return reply({ error: 'Invalid base64 encoding for public key' });
+      validateEd25519PublicKey(pubkey);
+    } catch (error) {
+      return reply({ error: `Invalid public key: ${error.message}` });
     }
 
     const router = supervisor.modules?.getModule
@@ -319,12 +426,12 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
       : null;
 
     if (!router) {
-      return reply({ error: 'router module not available' });
+      return reply({ error: 'Router module not available' });
     }
 
     try {
       router.addRoute(peerId, pubkey);
-      return reply({ ok: true });
+      return reply({ ok: true, peerId });
     } catch (err) {
       return reply({ ok: false, error: err.message });
     }
@@ -334,40 +441,56 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
   if (cmd.startsWith('router:remove ')) {
     const parts = cmd.split(' ');
     if (parts.length !== 2) {
-      return reply({ error: 'usage: router:remove <peerId>' });
+      return reply({ error: 'Usage: router:remove <peerId>' });
     }
 
-    const peerId = parts[1];
+    const peerId = sanitizeString(parts[1]);
+
+    // Validate peer ID
+    try {
+      validatePeerId(peerId);
+    } catch (error) {
+      return reply({ error: `Invalid peer ID: ${error.message}` });
+    }
 
     const router = supervisor.modules?.getModule
       ? supervisor.modules.getModule('router')
       : null;
 
     if (!router) {
-      return reply({ error: 'router module not available' });
+      return reply({ error: 'Router module not available' });
     }
 
     try {
       router.removeRoute(peerId);
-      return reply({ ok: true });
+      return reply({ ok: true, peerId });
     } catch (err) {
       return reply({ ok: false, error: err.message });
     }
   }
 
-  // --- Router: send with size limit ----------------------------------------
+  // --- Router: send with strict size limit ---------------------------------
   if (cmd.startsWith('router:send ')) {
     const parts = cmd.split(' ');
-    const peerId = parts[1];
+    const peerId = sanitizeString(parts[1]);
     const json = parts.slice(2).join(' ');
 
     if (!peerId || !json) {
-      return reply({ error: 'usage: router:send <peerId> <json>' });
+      return reply({ error: 'Usage: router:send <peerId> <json>' });
     }
-    
-    // Validate JSON size (prevent memory exhaustion)
-    if (json.length > 65536) {
-      return reply({ error: 'Payload too large (max 64KB)' });
+
+    // Validate peer ID
+    try {
+      validatePeerId(peerId);
+    } catch (error) {
+      return reply({ error: `Invalid peer ID: ${error.message}` });
+    }
+
+    // Validate JSON size (prevent memory exhaustion - DoS protection)
+    try {
+      validateMessageSize(json, 64 * 1024); // 64KB max
+    } catch (error) {
+      return reply({ error: error.message });
     }
 
     const router = supervisor.modules?.getModule
@@ -375,7 +498,7 @@ async function processCommand(line, supervisor, isAuthenticated, ipcToken, authM
       : null;
 
     if (!router) {
-      return reply({ error: 'router module not available' });
+      return reply({ error: 'Router module not available' });
     }
 
     try {
