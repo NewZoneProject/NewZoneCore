@@ -1,13 +1,14 @@
 // Module: Supervisor Process Manager
 // Description: Core supervisor for NewZoneCore. Holds cryptographic identity,
 //              trust store, master key, service registry, event bus and exposes
-//              unified state API. Now with full lifecycle and channel support.
+//              unified state API. Now with full lifecycle, channel and plugin support.
 // File: core/supervisor/process.js
 
 import { EventBus, EventTypes, getEventBus } from '../eventbus/index.js';
 import { ServiceManager, ServiceState, getServiceManager } from '../lifecycle/manager.js';
 import { Identity, IdentityManager } from '../identity/unified.js';
 import { ChannelManager, getChannelManager } from '../channel/manager.js';
+import { getPluginLoader } from '../plugins/loader.js';
 
 // ============================================================================
 // SUPERVISOR
@@ -252,13 +253,49 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh, envPat
   }
   
   // =========================================================================
+  // PLUGIN LOADER
+  // =========================================================================
+
+  const pluginLoader = getPluginLoader({ supervisor: null, storage: null });
+
+  async function initPlugins() {
+    await pluginLoader.init();
+    await pluginLoader.loadAll();
+    return pluginLoader;
+  }
+
+  async function startPlugins() {
+    const plugins = pluginLoader.listPlugins();
+    for (const plugin of plugins) {
+      try {
+        await pluginLoader.startPlugin(plugin.id);
+      } catch (error) {
+        console.error(`[supervisor] Failed to start plugin ${plugin.id}:`, error.message);
+      }
+    }
+  }
+
+  async function stopPlugins() {
+    await pluginLoader.shutdown();
+  }
+
+  function getPluginLoader() {
+    return pluginLoader;
+  }
+
+  function getPluginStatus() {
+    return pluginLoader.getStatus();
+  }
+
+  // =========================================================================
   // UNIFIED STATE API
   // =========================================================================
-  
+
   async function getState() {
     const serviceStatus = serviceManager.getStatus();
     const channelStatus = channelManager.getStatus();
-    
+    const pluginStatus = pluginLoader.getStatus();
+
     return {
       startedAt: state.startedAt,
       runtime: getRuntimeInfo(),
@@ -275,6 +312,12 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh, envPat
         total: channelStatus.total,
         open: channelStatus.open
       },
+      plugins: {
+        total: pluginStatus.total,
+        running: pluginStatus.running,
+        stopped: pluginStatus.stopped,
+        error: pluginStatus.error
+      },
       masterKeyLoaded: state.masterKeyLoaded,
       trustLoaded: state.trustLoaded
     };
@@ -283,53 +326,60 @@ export async function startSupervisor({ masterKey, trust, identity, ecdh, envPat
   // =========================================================================
   // PUBLIC API
   // =========================================================================
-  
+
   return {
     // Event bus
     eventBus,
     emit: eventBus.emit.bind(eventBus),
     subscribe: eventBus.subscribe.bind(eventBus),
     unsubscribe: eventBus.unsubscribe.bind(eventBus),
-    
+
     // Service manager
     serviceManager,
     registerService,
     getServices,
-    
+
     // Service lifecycle
     startService: (name, context) => serviceManager.start(name, context),
     stopService: (name, reason) => serviceManager.stop(name, reason),
     restartService: (name, reason) => serviceManager.restart(name, reason),
     getServiceStatus: () => serviceManager.getStatus(),
-    
+
     // Module registry
     modules: {
       registerModule,
       getModule,
       listModules
     },
-    
+
     // Identity
     identity: unifiedIdentity,
     getNodeId,
     getIdentity,
     getECDH,
     getIdentityInfo,
-    
+
     // Trust
     getTrust,
     addPeer,
     removePeer,
-    
+
     // Channels
     channelManager,
     openChannel: (peerId, options) => channelManager.open(peerId, options),
     closeChannel: (peerId, reason) => channelManager.close(peerId, reason),
     getChannelStatus: () => channelManager.getStatus(),
-    
+
+    // Plugins
+    pluginLoader,
+    initPlugins,
+    startPlugins,
+    stopPlugins,
+    getPluginStatus,
+
     // Runtime
     getRuntimeInfo,
-    
+
     // Unified state
     getState
   };
