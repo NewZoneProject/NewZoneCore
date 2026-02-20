@@ -1,0 +1,27 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "description": "Example plugin demonstrating NewZoneCore plugin API",
+  "author": "NewZoneCore Team",
+  "license": "MIT",
+  "main": "index.js",
+  "engines": {
+    "nzcore": ">=1.0.0"
+  },
+  "capabilities": [
+    "http:endpoint",
+    "ipc:command",
+    "event:handler"
+  ],
+  "permissions": [
+    "read:state",
+    "write:storage",
+    "register:endpoint",
+    "register:command"
+  ],
+  "config": {
+    "enabled": true,
+    "logLevel": "info",
+    "interval": 60000
+  }
+}
