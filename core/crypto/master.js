@@ -81,50 +81,43 @@ export async function saveSalt(salt) {
 
 /**
  * Derive master key from password using scrypt with unique salt.
- * 
- * CRITICAL FIX: Uses per-user unique salt instead of hardcoded constant.
- * This prevents rainbow table attacks and significantly increases
- * the cost of brute-force attacks.
- * 
+ *
+ * SECURITY: Uses per-user unique salt to prevent rainbow table attacks.
+ * This significantly increases the cost of brute-force attacks.
+ *
  * @param {string} password - User password
- * @param {Buffer|Uint8Array|null} salt - 32-byte salt (will be generated if null)
+ * @param {Buffer|Uint8Array} salt - 32-byte salt (required for security)
  * @returns {Promise<{key: Buffer, salt: Buffer}>}
  */
-export async function deriveMasterKey(password, salt = null) {
+export async function deriveMasterKey(password, salt) {
   if (!password || typeof password !== 'string') {
     throw new Error('Password must be a non-empty string');
   }
-  
-  // Use provided salt or generate new one
-  const actualSalt = salt || generateSalt();
-  
-  if (actualSalt.length !== SALT_LENGTH) {
-    throw new Error(`Salt must be ${SALT_LENGTH} bytes, got ${actualSalt.length}`);
+
+  if (!salt) {
+    throw new Error('Salt is required for secure key derivation');
   }
-  
+
+  if (!Buffer.isBuffer(salt) && !(salt instanceof Uint8Array)) {
+    throw new Error('Salt must be a Buffer or Uint8Array');
+  }
+
+  if (salt.length !== SALT_LENGTH) {
+    throw new Error(`Salt must be ${SALT_LENGTH} bytes, got ${salt.length}`);
+  }
+
   // Derive key using scrypt with configurable parameters
-  const key = crypto.scryptSync(password, actualSalt, KEY_LENGTH, {
+  const key = crypto.scryptSync(password, salt, KEY_LENGTH, {
     N: SCRYPT_N,
     r: SCRYPT_R,
     p: SCRYPT_P,
     maxmem: SCRYPT_MAXMEM
   });
-  
+
   return {
     key: Buffer.from(key),
-    salt: Buffer.from(actualSalt)
+    salt: Buffer.from(salt)
   };
-}
-
-/**
- * Legacy function for backward compatibility.
- * WARNING: This uses a deterministic salt and should NOT be used for new code.
- * @deprecated Use deriveMasterKey() with unique salt instead.
- */
-export function deriveMasterKeyLegacy(password) {
-  // 32-byte key using scrypt with deterministic salt
-  // Kept only for migration purposes
-  return crypto.scryptSync(password, 'nzcore-master-salt', 32);
 }
 
 // ============================================================================
@@ -187,24 +180,21 @@ export function wipeKey(keyBuffer) {
 
 /**
  * Verify password against stored master key.
+ * SECURITY: Requires salt to be provided - no fallback to insecure methods.
  * @param {string} password - User password
- * @param {Buffer} salt - Stored salt
+ * @param {Buffer} salt - Stored salt (required)
  * @returns {Promise<boolean>}
  */
-export async function verifyPassword(password, salt = null) {
+export async function verifyPassword(password, salt) {
+  if (!salt) {
+    throw new Error('Salt is required for password verification');
+  }
+
   const storedKey = await loadMasterKey();
   if (!storedKey) return false;
-  
-  // Load salt if not provided
-  const actualSalt = salt || await loadOrCreateSalt(false);
-  if (!actualSalt) {
-    // Fallback to legacy verification for migration
-    const derivedLegacy = deriveMasterKeyLegacy(password);
-    return crypto.timingSafeEqual(storedKey, derivedLegacy);
-  }
-  
-  const { key: derivedKey } = await deriveMasterKey(password, actualSalt);
-  
+
+  const { key: derivedKey } = await deriveMasterKey(password, salt);
+
   try {
     return crypto.timingSafeEqual(storedKey, derivedKey);
   } finally {
@@ -219,8 +209,9 @@ export async function verifyPassword(password, salt = null) {
 
 /**
  * Initialize master key (used by core.js).
- * Creates new key if none exists.
+ * SECURITY: Throws error in production mode if no master key exists.
  * @returns {Promise<Buffer>} 32-byte master key
+ * @throws {Error} If no master key exists in production mode
  */
 export async function initMasterKey() {
   // Try to load existing key
@@ -229,10 +220,25 @@ export async function initMasterKey() {
     console.log('[crypto] Master key loaded from disk');
     return existingKey;
   }
+
+  // Check if we're in production mode
+  const isProduction = process.env.NODE_ENV === 'production';
   
-  // No master.key exists - return placeholder for dev mode
-  // Bootstrap will create a real one with user password
-  console.log('[crypto] No master key found, returning placeholder');
+  if (isProduction) {
+    // SECURITY: In production, we require a master key to be set
+    const error = new Error(
+      'No master key found. In production mode, the master key must be pre-configured. ' +
+      'Please run bootstrap first or set NZCORE_MASTER_KEY environment variable.'
+    );
+    error.code = 'MASTER_KEY_MISSING';
+    throw error;
+  }
+
+  // Development mode: generate a temporary key for testing
+  // WARNING: This key will not persist across restarts
+  console.warn('[crypto] WARNING: No master key found. Generated temporary key for development.');
+  console.warn('[crypto] WARNING: Run bootstrap to create a persistent master key.');
+  
   return crypto.randomBytes(KEY_LENGTH);
 }
 
@@ -243,52 +249,16 @@ export async function initMasterKey() {
 export async function checkMasterKeyExists() {
   let hasKey = false;
   let hasSalt = false;
-  
+
   try {
     await fs.access(MASTER_FILE);
     hasKey = true;
   } catch {}
-  
+
   try {
     await fs.access(SALT_FILE);
     hasSalt = true;
   } catch {}
-  
-  return { hasKey, hasSalt };
-}
 
-/**
- * Migrate from legacy (hardcoded salt) to new (unique salt) format.
- * This re-derives the key with a new salt.
- * @param {string} password - User password
- * @returns {Promise<boolean>} Success status
- */
-export async function migrateToUniqueSalt(password) {
-  const legacyKey = deriveMasterKeyLegacy(password);
-  const storedKey = await loadMasterKey();
-  
-  if (!storedKey) {
-    console.log('[crypto] No key to migrate');
-    return false;
-  }
-  
-  // Check if legacy key matches stored
-  if (!crypto.timingSafeEqual(legacyKey, storedKey)) {
-    console.log('[crypto] Key doesn\'t match legacy format');
-    return false;
-  }
-  
-  // Re-derive with unique salt
-  const { key: newKey, salt } = await deriveMasterKey(password);
-  
-  // Save new key and salt
-  await saveMasterKey(newKey);
-  await saveSalt(salt);
-  
-  // Wipe temporary keys
-  wipeKey(newKey);
-  wipeKey(legacyKey);
-  
-  console.log('[crypto] Successfully migrated to unique salt');
-  return true;
+  return { hasKey, hasSalt };
 }

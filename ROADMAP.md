@@ -1,158 +1,560 @@
-# NewZoneCore Kernel Roadmap
-Minimal, autonomous, cryptographically anchored evolution plan for the NewZoneCore kernel.
-Each phase represents a structural milestone in the development of a self‑sovereign runtime.
+# NewZoneCore Development Roadmap
+
+**Version:** 3.0 (Security-First Enterprise Edition)  
+**Last Updated:** 20 февраля 2026 г.  
+**Status:** Security Audit Complete — Ready for Critical Fixes
 
 ---
 
-## Phase 0 — Stabilization (current → stable base)
-Goal: formalize the existing architecture and prepare the kernel for structured evolution.
+## Executive Summary
 
-### 0.1. Architecture Formalization
-- Create `ARCHITECTURE.md`
-- Create `MANIFEST.md`
-- Create `spec/core.md`
-- Create `spec/crypto.md`
-- Create `spec/env.md`
+NewZoneCore — это автономное криптографическое ядро для построения распределённых систем доверия. Данный документ определяет стратегический план развития проекта до Enterprise-стандарта с фокусом на безопасность, надёжность и production-ready.
 
-### 0.2. CLI ↔ IPC Integration
-- Implement IPC client for CLI
-- Implement `nzcore state`
-- Implement trust management commands
-- Implement identity inspection commands
-- Implement service inspection commands
+### Текущий статус проекта
 
-### 0.3. Supervisor Foundation
-- Add service registry
-- Add service metadata
-- Add supervisor state API extensions
+| Фаза | Название | Статус | Completion |
+|------|----------|--------|------------|
+| ✅ Phase 0 | Stabilization | COMPLETED | 100% |
+| ✅ Phase 1 | Kernel v1.0 | COMPLETED | 100% |
+| ✅ Phase 2 | Kernel v1.5 | COMPLETED | 100% |
+| ✅ Phase 3 | Kernel v2.0 | COMPLETED | 100% |
+| 🔴 Phase 4 | Security Hardening | IN PROGRESS | 0% |
+| ⏳ Phase 5 | Network Fabric | PENDING | 0% |
+| ⏳ Phase 6 | Production Ready | PENDING | 0% |
+| ⏳ Phase 7 | Enterprise Features | PENDING | 0% |
 
-### 0.4. HTTP & IPC API Completion
-- Add trust management endpoints
-- Add handshake endpoints
-- Add packet crypto endpoints
-- Add service management endpoints
+### Оценка безопасности (по результатам аудита)
 
----
-
-## Phase 1 — Kernel v1.0 (runtime foundation)
-Goal: transform supervisor into a real runtime with lifecycle and internal communication.
-
-### 1.1. Event Bus
-- Internal event queue
-- Subscriptions
-- Event routing
-- Supervisor‑level notifications
-
-### 1.2. Service Lifecycle
-- `init()`, `start()`, `stop()`, `status()`
-- Automatic registration
-- Supervisor‑controlled lifecycle
-
-### 1.3. Module Registry
-- `modules/` directory
-- Module manifests
-- Dynamic module loading
-- Supervisor integration
-
-### 1.4. Unified Identity Layer
-- Consolidated identity object
-- Unified signing API
-- Unified ECDH API
-- Identity export/import
-
-### 1.5. Secure Channel Manager
-- Channel registry
-- Automatic rekeying
-- Message send/receive API
-- Peer session management
+| Категория | Оценка | Статус |
+|-----------|--------|--------|
+| Криптография | 7/10 | ⚠️ Требует улучшений |
+| Безопасность | 6/10 | ⚠️ Критические уязвимости |
+| Архитектура | 8/10 | ✅ Хорошо |
+| Качество кода | 7/10 | ⚠️ Требует рефакторинга |
+| Тестирование | 5/10 | ❌ Недостаточно |
+| Документация | 8/10 | ✅ Хорошо |
+| **Production Ready** | **5/10** | **❌ Не готово** |
 
 ---
 
-## Phase 2 — Kernel v1.5 (distributed autonomy)
-Goal: enable trust propagation and secure routing between autonomous nodes.
+## 🔴 Phase 4: Security Hardening (Критический приоритет)
 
-### 2.1. Distributed Trust Sync
-- Signed trust updates
-- Trust replication protocol
-- Peer trust validation
+**Срок:** 2-3 недели  
+**Цель:** Устранить все критические и серьёзные уязвимости безопасности
 
-### 2.2. Routing Layer v2
-- Multi‑hop routing
-- TTL
-- Hop‑by‑hop signatures
-- Routing table
+### 4.1. Критические исправления безопасности
 
-### 2.3. Node Discovery (optional)
-- Local discovery
-- Peer introduction protocol
-- QR‑based identity exchange
+#### 4.1.1. Удаление legacy функций с уязвимостями
 
----
+**Задачи:**
+- [ ] Удалить `deriveMasterKeyLegacy()` из `core/crypto/master.js`
+- [ ] Удалить поддержку legacy формата seed (version 1)
+- [ ] Миграционный скрипт для пользователей с legacy salt
+- [ ] Обновить тесты для удаления legacy кода
 
-## Phase 3 — Kernel v2.0 (autonomous services)
-Goal: turn NewZoneCore into a self‑managing autonomous runtime.
+**Файлы:**
+- `core/crypto/master.js`
+- `core/crypto/keys.js`
+- `tests/security.test.js`
 
-### 3.1. Autonomous Services
-- Automatic startup
-- Crash recovery
-- Health checks
-- Dependency graph
-
-### 3.2. Secure Storage Layer
-- Encrypted files
-- Encrypted KV store
-- Encrypted event logs
-
-### 3.3. Distributed Message Fabric
-- Lightweight message bus
-- Peer‑to‑peer message routing
-- Service‑to‑service messaging
+**Acceptance Criteria:**
+- Никаких hardcoded salt в коде
+- Все тесты проходят
+- Migration guide написан
 
 ---
 
-## Phase 4 — Kernel v2.5 (ecosystem)
-Goal: enable modular expansion and external integrations.
+#### 4.1.2. Валидация входных данных (Input Validation)
 
-### 4.1. Plugin System
-- Module API
-- CLI extension API
-- HTTP extension API
-- Service extension API
+**Задачи:**
+- [ ] Создать центральный модуль валидации `core/utils/validator.js`
+- [ ] Валидация peer ID (whitelist символов, длина)
+- [ ] Валидация base64 public keys
+- [ ] Валидация JSON payload с size limits
+- [ ] Защита от инъекций в IPC командах
 
-### 4.2. WASM Sandbox (optional)
-- Isolated execution
-- Capability‑based permissions
+**Файлы:**
+- `core/utils/validator.js` (новый)
+- `core/api/ipc.js`
+- `core/api/http.js`
+- `core/trust/sync.js`
 
-### 4.3. Multi‑Identity Support
-- Multiple identities per node
-- Identity switching
-- Identity isolation
-
----
-
-## Phase 5 — Kernel v3.0 (maturity)
-Goal: finalize the kernel as a stable, documented, interoperable system.
-
-### 5.1. Formal Specifications
-- NZ‑CRYPTO‑01
-- NZ‑ROUTING‑01
-- NZ‑HANDSHAKE‑01
-- NZ‑CHANNEL‑01
-
-### 5.2. Test Vectors & Compliance
-- Cryptographic test vectors
-- Protocol compliance tests
-- Interoperability tests
-
-### 5.3. Stable API & ABI
-- Versioned kernel API
-- Backward compatibility
-- Long‑term stability guarantees
+**Acceptance Criteria:**
+- Все входные данные валидируются
+-单元测试 для всех валидаторов
+- Fuzzing тесты проходят
 
 ---
 
-## Philosophy
-NewZoneCore evolves as a minimal, portable, self‑sovereign kernel.
-Each phase strengthens autonomy, reduces external dependencies, and expands the node’s ability to operate independently in a distributed environment.
+#### 4.1.3. Timing-safe authentication
 
+**Задачи:**
+- [ ] Исправить `validateIpcToken()` для constant-time comparison
+- [ ] Добавить constant-time comparison для API keys
+- [ ] Audit всех сравнений чувствительных данных
 
+**Файлы:**
+- `core/api/ipc.js`
+- `core/crypto/auth.js`
+
+**Acceptance Criteria:**
+- Никаких early return до comparison
+- Все сравнения через `crypto.timingSafeEqual`
+
+---
+
+#### 4.1.4. Защита master key
+
+**Задачи:**
+- [ ] Заменить placeholder key на ошибку в production
+- [ ] Добавить проверку NODE_ENV для dev mode
+- [ ] Логирование попытки запуска без master key
+- [ ] Graceful shutdown при отсутствии ключа
+
+**Файлы:**
+- `core/crypto/master.js`
+- `core.js`
+
+**Acceptance Criteria:**
+- Ошибка при отсутствии master key в production
+- Явное предупреждение в dev mode
+
+---
+
+#### 4.1.5. Rate limiting для IPC
+
+**Задачи:**
+- [ ] Реализовать rate limiter для IPC AUTH команд
+- [ ] Блокировка после N неудачных попыток
+- [ ] Exponential backoff
+- [ ] Логирование попыток brute force
+
+**Файлы:**
+- `core/api/ipc.js`
+- `core/utils/rate-limiter.js` (новый)
+
+**Acceptance Criteria:**
+- Блокировка после 5 неудачных попыток
+- Разблокировка через 15 минут
+
+---
+
+### 4.2. Улучшения безопасности (High Priority)
+
+#### 4.2.1. Secure memory management
+
+**Задачи:**
+- [ ] Исследовать `crypto.secureHeap` (Node.js 19+)
+- [ ] Аудит всех мест хранения ключей в памяти
+- [ ] Явная очистка чувствительных переменных
+- [ ] Документация по memory security
+
+**Файлы:**
+- `core/crypto/keys.js`
+- `core/crypto/master.js`
+
+---
+
+#### 4.2.2. Защита от DoS
+
+**Задачи:**
+- [ ] Снизить лимиты размера файлов (1MB max)
+- [ ] Лимит на размер KV записей (100KB max)
+- [ ] Лимит на размер IPC сообщений (64KB max)
+- [ ] Лимит на количество peers (1000 max)
+
+**Файлы:**
+- `core/storage/secure.js`
+- `core/api/ipc.js`
+- `core/trust/sync.js`
+
+---
+
+#### 4.2.3. Шифрование trust store
+
+**Задачи:**
+- [ ] Шифрование trust.json с использованием master key
+- [ ] Migration существующих trust stores
+- [ ] Атомарная запись для предотвращения corruption
+
+**Файлы:**
+- `core/crypto/trust.js`
+
+---
+
+#### 4.2.4. HMAC-BLAKE2b audit
+
+**Задачи:**
+- [ ] Аудит самописной HMAC-BLAKE2b реализации
+- [ ] Замена на `crypto.createHmac()` если возможно
+- [ ] Тест векторы для проверки корректности
+
+**Файлы:**
+- `core/libs/hkdf.js`
+
+---
+
+### 4.3. Улучшения логирования и мониторинга
+
+**Задачи:**
+- [ ] Security logging для всех auth событий
+- [ ] Audit log для trust изменений
+- [ ] Alert на подозрительную активность
+- [ ] Redaction чувствительных данных в логах
+
+**Файлы:**
+- `core/logger.js`
+- `core/api/http.js`
+- `core/api/ipc.js`
+
+---
+
+## ⏳ Phase 5: Network Fabric
+
+**Срок:** 3-4 месяца  
+**Цель:** Реальная сетевая коммуникация между узлами
+
+### 5.1. Transport Layer
+
+**Задачи:**
+- [ ] TCP transport (server + client)
+- [ ] WebSocket transport
+- [ ] Transport abstraction interface
+- [ ] Connection pooling и keep-alive
+
+**Файлы:**
+- `core/transport/tcp.js`
+- `core/transport/websocket.js`
+- `core/transport/interface.js`
+- `core/transport/manager.js`
+
+**Метрики:**
+- Успешное соединение между двумя узлами
+- Шифрованная передача сообщений
+- Latency < 100ms в локальной сети
+
+---
+
+### 5.2. NAT Traversal
+
+**Задачи:**
+- [ ] STUN client (RFC 5389)
+- [ ] TURN relay (опционально)
+- [ ] UDP hole punching
+- [ ] UPnP/NAT-PMP для port mapping
+
+**Файлы:**
+- `core/nat/stun.js`
+- `core/nat/turn.js`
+- `core/nat/hole-punch.js`
+- `core/nat/upnp.js`
+
+---
+
+### 5.3. Distributed Hash Table (DHT)
+
+**Задачи:**
+- [ ] Kademlia DHT реализация
+- [ ] Node ID (XOR distance)
+- [ ] k-buckets routing table
+- [ ] FIND_NODE, FIND_VALUE операции
+- [ ] Bootstrap и maintenance
+
+**Файлы:**
+- `core/dht/kademlia.js`
+- `core/dht/routing-table.js`
+- `core/dht/operations.js`
+- `core/dht/bootstrap.js`
+
+**Метрики:**
+- 100+ узлов в routing таблице
+- FIND_NODE < 3 hops
+- Успешные store/retrieve операции
+
+---
+
+### 5.4. Network Service Discovery
+
+**Задачи:**
+- [ ] Service announcement через DHT
+- [ ] Service discovery queries
+- [ ] Service health tracking
+- [ ] Capability negotiation
+
+---
+
+## ⏳ Phase 6: Production Ready
+
+**Срок:** 2-3 месяца  
+**Цель:** Enterprise-ready система
+
+### 6.1. Observability
+
+**Задачи:**
+- [ ] Metrics collection (Prometheus format)
+- [ ] `/metrics` endpoint
+- [ ] Distributed tracing
+- [ ] Alert system
+- [ ] Health check endpoints
+
+**Файлы:**
+- `core/observability/metrics.js`
+- `core/observability/tracing.js`
+- `core/observability/alerts.js`
+
+---
+
+### 6.2. Backup & Recovery
+
+**Задачи:**
+- [ ] Full backup система
+- [ ] Incremental backup
+- [ ] Encrypted backup
+- [ ] Recovery процедуры
+- [ ] Backup scheduling
+
+---
+
+### 6.3. High Availability
+
+**Задачи:**
+- [ ] Graceful shutdown для всех сервисов
+- [ ] Crash recovery с состоянием
+- [ ] Cluster mode (опционально)
+- [ ] State replication
+
+---
+
+### 6.4. Documentation
+
+**Задачи:**
+- [ ] API documentation (OpenAPI/Swagger)
+- [ ] Deployment guide
+- [ ] Security hardening guide
+- [ ] CONTRIBUTING.md
+- [ ] Video tutorials
+
+**Файлы:**
+- `docs/DEPLOYMENT.md`
+- `docs/SECURITY_GUIDE.md`
+- `docs/CONTRIBUTING.md`
+- `docs/api/openapi.yaml`
+
+---
+
+## ⏳ Phase 7: Enterprise Features
+
+**Срок:** 3-4 месяца  
+**Цель:** Enterprise-ready функции
+
+### 7.1. Plugin System
+
+**Задачи:**
+- [ ] Plugin API definition
+- [ ] Plugin loader с sandbox
+- [ ] Capability-based permissions
+- [ ] Extension points (CLI, API, Services)
+
+---
+
+### 7.2. Multi-Identity Support
+
+**Задачи:**
+- [ ] Identity profiles
+- [ ] Profile switching
+- [ ] Per-identity storage
+- [ ] Identity delegation
+
+---
+
+### 7.3. RBAC (Role-Based Access Control)
+
+**Задачи:**
+- [ ] Role definition
+- [ ] Permission system
+- [ ] Granular access control
+- [ ] Audit logging
+
+---
+
+### 7.4. SDK & Client Libraries
+
+**Задачи:**
+- [ ] JavaScript/TypeScript SDK
+- [ ] Python SDK
+- [ ] Mobile SDK (React Native)
+
+---
+
+## Security Audit Findings Summary
+
+### Критические уязвимости (5)
+
+| ID | Описание | Статус | Приоритет |
+|----|----------|--------|-----------|
+| SEC-001 | Hardcoded salt в legacy функции | 🔴 Open | Critical |
+| SEC-002 | Отсутствие валидации IPC input | 🔴 Open | Critical |
+| SEC-003 | Timing attack в IPC token validation | 🔴 Open | Critical |
+| SEC-004 | Placeholder master key в dev mode | 🔴 Open | Critical |
+| SEC-005 | Нет rate limiting для IPC | 🔴 Open | Critical |
+
+### Серьёзные проблемы (8)
+
+| ID | Описание | Статус | Приоритет |
+|----|----------|--------|-----------|
+| SEC-011 | Неполная очистка памяти | 🟠 Open | High |
+| SEC-012 | Слабая DoS защита | 🟠 Open | High |
+| SEC-013 | Trust store без шифрования | 🟠 Open | High |
+| SEC-014 | Самописная HMAC-BLAKE2b | 🟠 Open | High |
+
+**Полный список:** см. `ROADMAP_AUDIT.md`
+
+---
+
+## Success Metrics
+
+### Security Metrics
+
+| Метрика | Current | Target (Phase 4) | Target (Phase 6) |
+|---------|---------|------------------|------------------|
+| Critical vulnerabilities | 5 | 0 | 0 |
+| High vulnerabilities | 8 | 0 | 0 |
+| Security test coverage | 27 tests | 100+ tests | 200+ tests |
+| Penetration test | Not done | Pass | Pass with zero findings |
+
+### Code Quality Metrics
+
+| Метрика | Current | Target (Phase 4) | Target (Phase 6) |
+|---------|---------|------------------|------------------|
+| Unit test coverage | ~60% | 75% | 90% |
+| Integration tests | 0 | 20+ | 50+ |
+| Code smells | TBD | -50% | -80% |
+| Technical debt | High | Medium | Low |
+
+### Performance Metrics
+
+| Метрика | Current | Target (Phase 5) | Target (Phase 6) |
+|---------|---------|------------------|------------------|
+| Login latency | TBD | < 500ms | < 200ms |
+| API response time | TBD | < 100ms | < 50ms |
+| IPC throughput | TBD | > 1000 msg/sec | > 5000 msg/sec |
+| Memory usage | ~50MB | < 100MB | < 150MB |
+
+---
+
+## Release Plan
+
+### v0.3.0 — Security Release (Q1 2026)
+
+**Фокус:** Phase 4 — Security Hardening
+
+**Ключевые изменения:**
+- Все критические уязвимости исправлены
+- Input validation для всех endpoints
+- Rate limiting реализован
+- Secure memory management
+
+**Дата:** Март 2026
+
+---
+
+### v0.4.0 — Network Release (Q2-Q3 2026)
+
+**Фокус:** Phase 5 — Network Fabric
+
+**Ключевые изменения:**
+- TCP/WebSocket transport
+- NAT traversal
+- DHT для discovery
+- Network service discovery
+
+**Дата:** Июль 2026
+
+---
+
+### v1.0.0 — Production Release (Q4 2026)
+
+**Фокус:** Phase 6 — Production Ready
+
+**Ключевые изменения:**
+- Observability (metrics, tracing)
+- Backup & recovery
+- High availability
+- Полная документация
+
+**Дата:** Ноябрь 2026
+
+---
+
+### v2.0.0 — Enterprise Release (Q2 2027)
+
+**Фокус:** Phase 7 — Enterprise Features
+
+**Ключевые изменения:**
+- Plugin system
+- Multi-identity
+- RBAC
+- SDK для разработчиков
+
+**Дата:** Май 2027
+
+---
+
+## Contributing
+
+### Как помочь
+
+1. **Security Audit:** Если вы эксперт по безопасности, пожалуйста, проверьте код
+2. **Testing:** Напишите тесты для увеличения покрытия
+3. **Documentation:** Улучшите документацию
+4. **Code:** Реализуйте задачи из этого roadmap
+
+### Process
+
+1. Выберите задачу из roadmap
+2. Создайте issue на GitHub
+3. Fork и создайте branch
+4. Реализуйте изменения
+5. Напишите тесты
+6. Создайте Pull Request
+
+---
+
+## Revision History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 3.0 | 20.02.2026 | Security Audit | Complete rewrite after security audit |
+| 2.0 | 16.02.2026 | Core Team | Phase 3 completion update |
+| 1.0 | 01.01.2026 | Core Team | Initial roadmap |
+
+---
+
+## Приложения
+
+### A. Security Checklist
+
+Перед каждым релизом:
+
+- [ ] Все critical/high уязвимости исправлены
+- [ ] Security тесты проходят
+- [ ] Dependency audit выполнен (`npm audit`)
+- [ ] No hardcoded secrets в коде
+- [ ] Все API endpoints имеют rate limiting
+- [ ] Input validation для всех внешних данных
+- [ ] Security logging настроен
+
+### B. Definition of Done
+
+Задача считается выполненной когда:
+
+- [ ] Код реализован
+- [ ] Тесты написаны и проходят
+- [ ] Документация обновлена
+- [ ] Code review выполнен
+- [ ] Security review для security-critical кода
+
+---
+
+*Этот документ является живым и обновляется после каждой итерации.*  
+*Последнее обновление: 20 февраля 2026 г.*
