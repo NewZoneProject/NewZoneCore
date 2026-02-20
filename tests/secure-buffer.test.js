@@ -185,13 +185,15 @@ describe('SecureBuffer', () => {
       const buf = new SecureBuffer(32);
       const sensitiveData = Buffer.from('sensitive-data-here-1234567890');
       sensitiveData.copy(buf.buffer);
+
+      // Verify data is there before free
+      expect(buf.buffer[0]).toBe('s'.charCodeAt(0));
       
       buf.free();
-      
-      // After free, buffer should be completely zeroed
-      // The multiple passes ensure data is unrecoverable
-      const bufferAfter = buf.buffer;
-      // Should throw because freed
+
+      // After free, buffer should be inaccessible
+      expect(() => buf.buffer).toThrow('SecureBuffer has been freed');
+      expect(buf.isValid()).toBe(false);
     });
 
     it('should handle zero-size buffer', () => {
