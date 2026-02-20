@@ -18,10 +18,12 @@ const KEY_SIZE = 32;
 const NONCE_SIZE = 12;
 const TAG_SIZE = 16;
 
-// Security limits
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
-const MAX_KEY_SIZE = 10 * 1024 * 1024;   // 10 MB for KV values
-const MAX_LOG_SIZE = 50 * 1024 * 1024;   // 50 MB for logs
+// Security limits (DoS protection)
+// These limits prevent memory exhaustion and disk space attacks
+const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1 MB (reduced from 100 MB)
+const MAX_KEY_SIZE = 100 * 1024;       // 100 KB for KV values (reduced from 10 MB)
+const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB for logs (reduced from 50 MB)
+const MAX_PEERS = 1000;                // Maximum number of trusted peers
 
 // ============================================================================
 // KEY DERIVATION (Using HKDF)
