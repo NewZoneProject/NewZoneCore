@@ -10,6 +10,7 @@ import {
   validateJsonPayload,
   validatePassword
 } from '../utils/validator.js';
+import { getSecurityAuditLogger, AuditEventType } from '../utils/security-audit.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -24,6 +25,9 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 const loginAttempts = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+
+// Get security audit logger instance
+const auditLogger = getSecurityAuditLogger();
 
 // ============================================================================
 // HTTP API SERVER
@@ -234,6 +238,16 @@ async function handleLogin(req, res, authManager) {
     const rateLimit = checkLoginRateLimit(clientIp);
     if (!rateLimit.allowed) {
       recordFailedLogin(clientIp);
+      
+      // Log security incident
+      await auditLogger.logRateLimit({
+        endpoint: '/api/auth/login',
+        limit: MAX_LOGIN_ATTEMPTS,
+        windowMs: LOCKOUT_DURATION,
+        currentCount: loginAttempts.get(clientIp)?.count || 0,
+        ip: clientIp
+      });
+      
       res.writeHead(429);
       return res.end(JSON.stringify({ error: rateLimit.error }));
     }
@@ -246,13 +260,22 @@ async function handleLogin(req, res, authManager) {
       validatePassword(password, {
         minLength: 8,
         maxLength: 128,
-        requireUppercase: false, // Allow flexible passwords
+        requireUppercase: false,
         requireLowercase: false,
         requireNumbers: false,
         requireSymbols: false
       });
     } catch (error) {
       recordFailedLogin(clientIp);
+      
+      // Log invalid input
+      await auditLogger.log(AuditEventType.SECURITY_INVALID_INPUT, {
+        field: 'password',
+        reason: error.message
+      }, {
+        ip: clientIp
+      });
+      
       res.writeHead(400);
       return res.end(JSON.stringify({ error: error.message }));
     }
@@ -261,15 +284,38 @@ async function handleLogin(req, res, authManager) {
 
     if (result.success) {
       clearFailedLogin(clientIp);
+      
+      // Log successful authentication
+      await auditLogger.logAuthSuccess({
+        method: 'password',
+        ip: clientIp
+      });
+      
       res.writeHead(200);
       res.end(JSON.stringify(result));
     } else {
       recordFailedLogin(clientIp);
+      
+      // Log authentication failure
+      await auditLogger.logAuthFailure({
+        method: 'password',
+        reason: result.error || 'unknown',
+        ip: clientIp
+      });
+      
       res.writeHead(401);
       res.end(JSON.stringify({ error: result.error }));
     }
   } catch (error) {
     recordFailedLogin(clientIp);
+    
+    // Log error
+    await auditLogger.logSecurityIncident({
+      type: 'login_error',
+      description: error.message,
+      ip: clientIp
+    });
+    
     res.writeHead(500);
     res.end(JSON.stringify({ error: 'Internal server error' }));
   }
