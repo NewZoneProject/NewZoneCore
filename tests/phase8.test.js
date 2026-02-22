@@ -175,13 +175,13 @@ describe('Performance Profiling', () => {
     const profiler = new FunctionProfiler();
     
     const { result, profile } = await profiler.profile('async-function', async () => {
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 5));
       return 'done';
     });
     
     expect(result).toBe('done');
     expect(profile.name).toBe('async-function');
-    expect(profile.duration).toBeGreaterThanOrEqual(10);
+    expect(profile.duration).toBeGreaterThanOrEqual(5);
   });
 
   it('should get profile statistics', () => {
