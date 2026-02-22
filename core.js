@@ -27,6 +27,41 @@ async function safeImport(relPath) {
 export async function startCore() {
   console.log('[NewZoneCore] bootstrapping…');
 
+  // --- 0. Initialize Observability -----------------------------------------
+  const { getMetrics, getHealthChecker, registerDefaultHealthChecks } = 
+    await safeImport('./core/observability/metrics.js');
+  const { getTracer, createTraceMiddleware } = 
+    await safeImport('./core/observability/tracing.js');
+  const { getAlertManager, registerSystemAlerts, registerSecurityAlerts } = 
+    await safeImport('./core/observability/alerts.js');
+  const { getBackupManager, createBackupScheduler } = 
+    await safeImport('./core/observability/backup.js');
+  const { getRecoveryManager, getCrashReporter } = 
+    await safeImport('./core/observability/recovery.js');
+  const { getShutdownManager, registerDefaultCleanup } = 
+    await safeImport('./core/observability/shutdown.js');
+
+  // Initialize crash reporter
+  const crashReporter = await getCrashReporter({ enabled: true });
+  
+  // Initialize metrics
+  const metrics = getMetrics();
+  
+  // Initialize health checker
+  const healthChecker = getHealthChecker();
+  
+  // Initialize tracer
+  const tracer = getTracer({ 
+    samplingRate: process.env.TRACING_SAMPLE_RATE || 0.1 
+  });
+  
+  // Initialize alert manager
+  const alertManager = getAlertManager();
+  registerSystemAlerts(alertManager);
+  registerSecurityAlerts(alertManager);
+  
+  console.log('[observability] Crash reporter, metrics, health checker initialized');
+
   // --- 1. Startup checks ----------------------------------------------------
   const checksMod = await safeImport('./core/startup/checks.js');
   const bootstrapMod = await safeImport('./core/startup/bootstrap.js');
@@ -82,7 +117,34 @@ export async function startCore() {
 
   console.log('[supervisor] ready');
 
-  // --- 4. Load local services ----------------------------------------------
+  // --- 4. Register Health Checks -------------------------------------------
+  registerDefaultHealthChecks(supervisor);
+  console.log('[health] Default health checks registered');
+
+  // --- 5. Initialize Recovery Manager --------------------------------------
+  const recoveryManager = await getRecoveryManager();
+  recoveryManager.start(supervisor);
+  console.log('[recovery] Recovery manager started');
+
+  // --- 6. Initialize Backup Manager ----------------------------------------
+  const backupManager = await getBackupManager({
+    backupDir: process.env.BACKUP_DIR || './backups',
+    envDir: process.env.ENV_DIR || './env',
+    encryptionKey: masterKey
+  });
+  
+  // Start scheduled backups if enabled
+  if (process.env.BACKUP_ENABLED !== 'false') {
+    const backupScheduler = createBackupScheduler(backupManager, {
+      enabled: true,
+      fullBackupInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
+      incrementalInterval: 24 * 60 * 60 * 1000 // 1 day
+    });
+    backupScheduler.start();
+    console.log('[backup] Scheduled backups enabled');
+  }
+
+  // --- 7. Load local services ----------------------------------------------
   const loaderMod = await safeImport('./core/services/loader.js');
 
   if (loaderMod?.loadLocalServices) {
@@ -92,17 +154,27 @@ export async function startCore() {
     console.log('[services] no service loader found (skipped)');
   }
 
-  // --- 5. HTTP API ----------------------------------------------------------
+  // --- 8. HTTP API ----------------------------------------------------------
   const httpMod = await safeImport('./core/api/http.js');
 
   if (httpMod?.startHttpApi) {
-    await httpMod.startHttpApi({ supervisor });
+    const httpServer = await httpMod.startHttpApi({ supervisor });
+    
+    // Add observability endpoints
+    const { addObservabilityEndpoints } = 
+      await safeImport('./core/observability/endpoint.js');
+    
+    if (addObservabilityEndpoints) {
+      addObservabilityEndpoints(httpServer, supervisor);
+      console.log('[observability] Metrics and health endpoints added');
+    }
+    
     console.log('[http] HTTP API online');
   } else {
     console.log('[http] placeholder HTTP API started');
   }
 
-  // --- 6. IPC API -----------------------------------------------------------
+  // --- 9. IPC API -----------------------------------------------------------
   const ipcMod = await safeImport('./core/api/ipc.js');
 
   if (ipcMod?.startIpcServer) {
@@ -112,8 +184,37 @@ export async function startCore() {
     console.log('[ipc] placeholder IPC server started');
   }
 
-  // --- 7. Final state -------------------------------------------------------
+  // --- 10. Register Shutdown Cleanup ---------------------------------------
+  const shutdownManager = getShutdownManager();
+  registerDefaultCleanup(supervisor);
+  
+  // Add recovery manager cleanup
+  shutdownManager.register('recovery', async () => {
+    recoveryManager.stop();
+  }, 1);
+  
+  // Add backup manager cleanup
+  shutdownManager.register('backup', async () => {
+    await backupManager.createBackup({
+      type: 'incremental',
+      description: 'Pre-shutdown backup',
+      tags: ['shutdown']
+    });
+  }, 2);
+  
+  // Add tracer shutdown
+  shutdownManager.register('tracing', async () => {
+    await tracer.shutdown();
+  }, 3);
+  
+  console.log('[shutdown] Cleanup handlers registered');
+
+  // --- 11. Final state ------------------------------------------------------
   console.log('[NewZoneCore] online.');
+  
+  // Emit startup event
+  metrics.inc('uptime_seconds');
+  tracer.startSpan('core.startup').end();
 }
 
 // --- Auto-start when executed directly -------------------------------------

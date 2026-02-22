@@ -1,51 +1,42 @@
 # NewZoneCore Deployment Guide
 
-**Version:** 1.0.0  
-**Last Updated:** 20 февраля 2026 г.  
-**Status:** Production Ready
+**Version:** 0.3.0
+**Last Updated:** 21 февраля 2026 г.
 
 ---
 
 ## Table of Contents
 
-- [System Requirements](#system-requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running in Production](#running-in-production)
-- [Docker Deployment](#docker-deployment)
-- [Kubernetes Deployment](#kubernetes-deployment)
-- [Monitoring](#monitoring)
-- [Backup and Recovery](#backup-and-recovery)
-- [Troubleshooting](#troubleshooting)
+1. [Prerequisites](#prerequisites)
+2. [Installation](#installation)
+3. [Configuration](#configuration)
+4. [Running NewZoneCore](#running-newzonecore)
+5. [Production Deployment](#production-deployment)
+6. [Docker Deployment](#docker-deployment)
+7. [Backup and Recovery](#backup-and-recovery)
+8. [Monitoring and Observability](#monitoring-and-observability)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
-## System Requirements
+## Prerequisites
 
-### Minimum Requirements
+### System Requirements
 
-| Component | Requirement |
-|-----------|-------------|
-| CPU | 1 core |
-| RAM | 256 MB |
-| Disk | 1 GB |
-| Node.js | >= 18.0.0 |
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | 1 core | 2+ cores |
+| RAM | 256 MB | 512+ MB |
+| Disk | 1 GB | 5+ GB |
+| Node.js | 18.0.0 | 20.0.0+ |
 
-### Recommended Requirements
+### Supported Platforms
 
-| Component | Requirement |
-|-----------|-------------|
-| CPU | 2+ cores |
-| RAM | 512 MB+ |
-| Disk | 10 GB+ SSD |
-| Network | 100 Mbps+ |
-
-### Operating Systems
-
-- ✅ Linux (Ubuntu 20.04+, Debian 11+, CentOS 8+)
-- ✅ macOS (11+)
-- ✅ Windows (10+, WSL2 recommended)
-- ✅ Docker (any platform)
+- ✅ Linux (Ubuntu, Debian, CentOS, Alpine)
+- ✅ macOS
+- ✅ Windows (WSL2 recommended)
+- ✅ Docker / Docker Compose
+- ✅ Termux (Android)
 
 ---
 
@@ -65,16 +56,25 @@ npm install
 npm run bootstrap
 ```
 
-### From NPM (when published)
+### Using NPM
 
 ```bash
 npm install -g nzcore
+
+# Initialize
+nzcore init
 ```
 
 ### Using Docker
 
 ```bash
 docker pull newzoneproject/nzcore:latest
+
+docker run -d \
+  --name nzcore \
+  -p 3000:3000 \
+  -v nzcore-data:/app/env \
+  newzoneproject/nzcore:latest
 ```
 
 ---
@@ -85,38 +85,57 @@ docker pull newzoneproject/nzcore:latest
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `NODE_ENV` | Environment (production/development) | `development` |
-| `API_PORT` | HTTP API port | `3000` |
+| `NODE_ENV` | Environment mode | `development` |
 | `API_HOST` | HTTP API host | `127.0.0.1` |
-| `ALLOWED_ORIGINS` | CORS allowed origins | `localhost` |
-| `NZCORE_DEBUG` | Enable debug logging | `false` |
-| `NZCORE_DATA_DIR` | Data directory | `./env` |
-| `NZCORE_LOGS_DIR` | Logs directory | `./logs` |
+| `API_PORT` | HTTP API port | `3000` |
+| `IPC_PATH` | IPC socket path | `./nzcore.ipc` |
+| `ENV_DIR` | Environment directory | `./env` |
+| `LOG_LEVEL` | Logging level | `info` |
+| `BACKUP_DIR` | Backup directory | `./backups` |
+| `METRICS_ENABLED` | Enable metrics | `true` |
 
 ### Configuration File
 
-Create `config.json` in the project root:
+Create `config.json` in the environment directory:
 
 ```json
 {
+  "node": {
+    "name": "my-node",
+    "environment": "production"
+  },
   "api": {
-    "port": 3000,
     "host": "127.0.0.1",
+    "port": 3000,
     "cors": ["http://localhost:3000"]
   },
   "security": {
     "rateLimit": {
+      "enabled": true,
       "maxAttempts": 5,
       "windowMs": 900000
     }
   },
-  "storage": {
-    "maxFileSize": 1048576,
-    "maxKeySize": 102400
+  "backup": {
+    "enabled": true,
+    "dir": "./backups",
+    "schedule": {
+      "full": "0 0 * * 0",
+      "incremental": "0 0 * * *"
+    }
   },
-  "network": {
-    "dht": {
-      "bootstrapNodes": ["node1.newzone.io", "node2.newzone.io"]
+  "observability": {
+    "metrics": {
+      "enabled": true,
+      "port": 9090
+    },
+    "tracing": {
+      "enabled": true,
+      "exporter": "http://localhost:4318/v1/traces"
+    },
+    "alerts": {
+      "enabled": true,
+      "webhook": "https://hooks.example.com/alerts"
     }
   }
 }
@@ -124,49 +143,46 @@ Create `config.json` in the project root:
 
 ---
 
-## Running in Production
+## Running NewZoneCore
 
-### 1. Initial Setup
+### Development Mode
 
 ```bash
-# Set production environment
-export NODE_ENV=production
+# Start with default configuration
+npm start
 
-# Create data directory with secure permissions
-mkdir -p /var/lib/nzcore
-chmod 700 /var/lib/nzcore
-
-# Initialize with strong password
-nzcore init --password "YOUR_STRONG_PASSWORD"
+# Start with custom config
+nzcore start --config ./custom-config.json
 ```
 
-### 2. Start as System Service
+### Production Mode
 
-#### systemd (Linux)
+```bash
+# Set environment
+export NODE_ENV=production
+export API_HOST=0.0.0.0
+
+# Start
+nzcore start
+```
+
+### As a Service (systemd)
 
 Create `/etc/systemd/system/nzcore.service`:
 
 ```ini
 [Unit]
-Description=NewZoneCore Distributed Trust System
+Description=NewZoneCore Node
 After=network.target
 
 [Service]
 Type=simple
 User=nzcore
-Group=nzcore
 WorkingDirectory=/opt/nzcore
 Environment=NODE_ENV=production
-Environment=NZCORE_DATA_DIR=/var/lib/nzcore
 ExecStart=/usr/bin/node /opt/nzcore/core.js
 Restart=on-failure
 RestartSec=10
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/nzcore /var/log/nzcore
 
 [Install]
 WantedBy=multi-user.target
@@ -174,23 +190,70 @@ WantedBy=multi-user.target
 
 ```bash
 # Enable and start
-sudo systemctl daemon-reload
 sudo systemctl enable nzcore
 sudo systemctl start nzcore
 sudo systemctl status nzcore
 ```
 
-### 3. Verify Installation
+---
+
+## Production Deployment
+
+### Security Hardening
+
+#### 1. File Permissions
 
 ```bash
-# Check health
-curl http://localhost:3000/health
+# Set restrictive permissions
+chmod 700 env/
+chmod 600 env/master.key
+chmod 600 env/seed.enc
+chmod 600 env/trust.json
+chmod 600 env/keys/*.json
 
-# Check metrics
-curl http://localhost:3000/metrics
+# Set ownership
+chown -R nzcore:nzcore /opt/nzcore
+```
 
-# Check logs
-journalctl -u nzcore -f
+#### 2. Firewall Configuration
+
+```bash
+# Allow only necessary ports
+ufw default deny incoming
+ufw allow 22/tcp        # SSH
+ufw allow 3000/tcp      # API (if external access needed)
+ufw enable
+```
+
+#### 3. Reverse Proxy (Nginx)
+
+```nginx
+server {
+    listen 80;
+    server_name nzcore.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    location /metrics {
+        proxy_pass http://127.0.0.1:9090;
+        auth_basic "Metrics";
+        auth_basic_user_file /etc/nginx/.metrics_htpasswd;
+    }
+}
+```
+
+#### 4. TLS/SSL
+
+```bash
+# Let's Encrypt
+certbot --nginx -d nzcore.example.com
 ```
 
 ---
@@ -200,35 +263,33 @@ journalctl -u nzcore -f
 ### Dockerfile
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:20-alpine
 
-# Create non-root user
-RUN addgroup -g 1001 nzcore && \
-    adduser -u 1001 -G nzcore -D nzcore
-
-# Set working directory
 WORKDIR /app
 
 # Copy package files
-COPY --chown=nzcore:nzcore package*.json ./
+COPY package*.json ./
 
 # Install dependencies
 RUN npm ci --only=production
 
 # Copy application
-COPY --chown=nzcore:nzcore . .
+COPY . .
 
-# Switch to non-root user
+# Create non-root user
+RUN addgroup -g 1001 nzcore && \
+    adduser -u 1001 -G nzcore -s /bin/sh -D nzcore && \
+    chown -R nzcore:nzcore /app
+
 USER nzcore
 
 # Expose ports
-EXPOSE 3000
+EXPOSE 3000 9090
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
 
-# Start application
 CMD ["node", "core.js"]
 ```
 
@@ -243,215 +304,204 @@ services:
     container_name: nzcore
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
+      - "9090:9090"
     volumes:
-      - nzcore_data:/var/lib/nzcore
-      - nzcore_logs:/var/log/nzcore
+      - nzcore-data:/app/env
+      - nzcore-backups:/app/backups
+      - nzcore-logs:/app/logs
     environment:
       - NODE_ENV=production
-      - NZCORE_DATA_DIR=/var/lib/nzcore
-      - NZCORE_LOGS_DIR=/var/log/nzcore
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - API_HOST=0.0.0.0
+      - LOG_LEVEL=info
+    networks:
+      - nzcore-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - nzcore-network
+    depends_on:
+      - nzcore
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - nzcore-network
+    depends_on:
+      - prometheus
 
 volumes:
-  nzcore_data:
-  nzcore_logs:
+  nzcore-data:
+  nzcore-backups:
+  nzcore-logs:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  nzcore-network:
+    driver: bridge
 ```
-
-```bash
-# Start with Docker Compose
-docker-compose up -d
-
-# View logs
-docker-compose logs -f nzcore
-
-# Stop
-docker-compose down
-```
-
----
-
-## Kubernetes Deployment
-
-### Deployment Manifest
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nzcore
-  labels:
-    app: nzcore
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nzcore
-  template:
-    metadata:
-      labels:
-        app: nzcore
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1001
-      containers:
-      - name: nzcore
-        image: newzoneproject/nzcore:latest
-        ports:
-        - containerPort: 3000
-          name: http
-        env:
-        - name: NODE_ENV
-          value: "production"
-        - name: NZCORE_DATA_DIR
-          value: "/data"
-        volumeMounts:
-        - name: data
-          mountPath: /data
-        - name: logs
-          mountPath: /var/log/nzcore
-        livenessProbe:
-          httpGet:
-            path: /live
-            port: 3000
-          initialDelaySeconds: 30
-          periodSeconds: 30
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 3000
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: nzcore-data
-      - name: logs
-        emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: nzcore
-spec:
-  selector:
-    app: nzcore
-  ports:
-  - port: 3000
-    targetPort: 3000
-  type: ClusterIP
-```
-
----
-
-## Monitoring
-
-### Prometheus Metrics
-
-NewZoneCore exposes Prometheus-compatible metrics at `/metrics`:
-
-```bash
-curl http://localhost:3000/metrics
-```
-
-**Available Metrics:**
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `nzcore_uptime_seconds` | Counter | System uptime |
-| `nzcore_memory_heap_used_bytes` | Gauge | Heap memory used |
-| `nzcore_auth_attempts_total` | Counter | Authentication attempts |
-| `nzcore_security_events_total` | Counter | Security events |
-| `nzcore_network_messages_total` | Counter | Network messages |
-| `nzcore_network_peers_connected` | Gauge | Connected peers |
-| `nzcore_services_running` | Gauge | Running services |
-| `nzcore_dht_routing_table_size` | Gauge | DHT table size |
-
-### Grafana Dashboard
-
-Import the provided Grafana dashboard from `docs/monitoring/grafana-dashboard.json`.
-
-### Health Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `/health` | Overall health status |
-| `/ready` | Readiness probe |
-| `/live` | Liveness probe |
 
 ---
 
 ## Backup and Recovery
 
-### Backup Procedure
+### Manual Backup
 
 ```bash
-# 1. Stop the service
-sudo systemctl stop nzcore
+# Create full backup
+nzcore backup:create --type full --description "Manual backup"
 
-# 2. Backup data directory
-tar -czf nzcore-backup-$(date +%Y%m%d).tar.gz /var/lib/nzcore
+# List backups
+nzcore backup:list
 
-# 3. Backup configuration
-cp config.json nzcore-config-backup-$(date +%Y%m%d).json
+# Verify backup
+nzcore backup:verify <backup-id>
 
-# 4. Restart service
-sudo systemctl start nzcore
-
-# 5. Verify backup
-tar -tzf nzcore-backup-$(date +%Y%m%d).tar.gz
+# Restore from backup
+nzcore backup:restore <backup-id>
 ```
 
-### Automated Backups
+### Scheduled Backups
 
-Create `/etc/cron.daily/nzcore-backup`:
+Enable automatic backups in configuration:
 
-```bash
-#!/bin/bash
-BACKUP_DIR="/backup/nzcore"
-DATE=$(date +%Y%m%d)
-
-# Create backup
-tar -czf $BACKUP_DIR/nzcore-backup-$DATE.tar.gz /var/lib/nzcore
-
-# Keep only last 7 backups
-find $BACKUP_DIR -name "nzcore-backup-*.tar.gz" -mtime +7 -delete
+```json
+{
+  "backup": {
+    "enabled": true,
+    "schedule": {
+      "full": "0 0 * * 0",
+      "incremental": "0 0 * * *"
+    },
+    "retention": {
+      "maxBackups": 10,
+      "maxAge": "30d"
+    }
+  }
+}
 ```
 
-```bash
-chmod +x /etc/cron.daily/nzcore-backup
+### Disaster Recovery
+
+1. **Install NewZoneCore** on new system
+2. **Restore from backup**:
+   ```bash
+   nzcore backup:restore <backup-id>
+   ```
+3. **Verify restoration**:
+   ```bash
+   nzcore doctor
+   ```
+4. **Start node**:
+   ```bash
+   nzcore start
+   ```
+
+---
+
+## Monitoring and Observability
+
+### Metrics Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/metrics` | Prometheus-format metrics |
+| `/health` | Health status |
+| `/ready` | Readiness probe |
+| `/live` | Liveness probe |
+
+### Key Metrics
+
+```
+# System metrics
+nzcore_uptime_seconds
+nzcore_memory_heap_used_bytes
+nzcore_memory_rss_bytes
+
+# Security metrics
+nzcore_auth_attempts_total
+nzcore_security_events_total
+nzcore_rate_limited_connections
+
+# Network metrics
+nzcore_network_messages_total
+nzcore_network_peers_connected
+nzcore_dht_routing_table_size
+
+# Service metrics
+nzcore_services_running
+nzcore_service_restarts_total
 ```
 
-### Recovery Procedure
+### Alerting
 
-```bash
-# 1. Stop the service
-sudo systemctl stop nzcore
+Configure alerts in configuration:
 
-# 2. Restore data
-tar -xzf nzcore-backup-20260220.tar.gz -C /
+```json
+{
+  "alerts": {
+    "enabled": true,
+    "channels": [
+      {
+        "type": "webhook",
+        "url": "https://hooks.example.com/alerts",
+        "severities": ["critical", "high"]
+      },
+      {
+        "type": "email",
+        "recipients": ["admin@example.com"],
+        "severities": ["critical"]
+      }
+    ],
+    "rules": {
+      "highMemory": {
+        "threshold": 0.85,
+        "severity": "high"
+      },
+      "authFailures": {
+        "threshold": 10,
+        "severity": "critical"
+      }
+    }
+  }
+}
+```
 
-# 3. Set permissions
-chown -R nzcore:nzcore /var/lib/nzcore
-chmod 700 /var/lib/nzcore
+### Distributed Tracing
 
-# 4. Start service
-sudo systemctl start nzcore
+Enable tracing for request tracking:
 
-# 5. Verify
-curl http://localhost:3000/health
+```json
+{
+  "tracing": {
+    "enabled": true,
+    "samplingRate": 0.1,
+    "exporter": {
+      "type": "http",
+      "url": "http://jaeger:4318/v1/traces"
+    }
+  }
+}
 ```
 
 ---
@@ -460,66 +510,104 @@ curl http://localhost:3000/health
 
 ### Common Issues
 
-#### 1. Service Won't Start
+#### 1. Node Won't Start
 
+**Symptoms:**
+```
+Error: Master key not found
+```
+
+**Solution:**
 ```bash
-# Check logs
-journalctl -u nzcore -n 50
+# Check environment directory
+ls -la env/
 
-# Check configuration
-node -e "console.log(require('./config.json'))"
-
-# Check permissions
-ls -la /var/lib/nzcore
+# Reinitialize if needed
+nzcore init
 ```
 
 #### 2. High Memory Usage
 
+**Symptoms:**
+```
+Memory usage exceeds threshold
+```
+
+**Solution:**
 ```bash
 # Check memory metrics
 curl http://localhost:3000/metrics | grep memory
 
-# Enable GC logging
-export NODE_OPTIONS="--trace-gc"
-
-# Consider increasing limits
-export NODE_OPTIONS="--max-old-space-size=512"
-```
-
-#### 3. Network Connectivity Issues
-
-```bash
-# Check network status
-curl http://localhost:3000/metrics | grep network
-
-# Check firewall
-sudo ufw status
-
-# Check port binding
-netstat -tlnp | grep 3000
-```
-
-#### 4. Authentication Failures
-
-```bash
-# Check security logs
-grep "auth" /var/log/nzcore/*.log
-
-# Check rate limiting
-curl http://localhost:3000/metrics | grep auth_attempts
-
-# Reset rate limits (if needed)
 # Restart service
 sudo systemctl restart nzcore
+
+# Check for memory leaks in logs
+tail -f logs/error.log
 ```
 
-### Getting Help
+#### 3. Backup Fails
 
-- **Documentation:** https://github.com/NewZoneProject/NewZoneCore/docs
+**Symptoms:**
+```
+Backup failed: ENOSPC
+```
+
+**Solution:**
+```bash
+# Check disk space
+df -h
+
+# Cleanup old backups
+nzcore backup:cleanup --max-age 7d
+
+# Expand storage if needed
+```
+
+#### 4. Connection Issues
+
+**Symptoms:**
+```
+Failed to connect to peer
+```
+
+**Solution:**
+```bash
+# Check firewall
+ufw status
+
+# Verify network configuration
+nzcore network:status
+
+# Check NAT traversal
+nzcore nat:test
+```
+
+### Logs
+
+| Log File | Description |
+|----------|-------------|
+| `logs/nzcore.log` | Main application log |
+| `logs/error.log` | Error log |
+| `logs/security-audit.log` | Security audit log |
+| `logs/crashes/` | Crash reports |
+
+### Debug Mode
+
+```bash
+# Enable verbose logging
+export LOG_LEVEL=debug
+nzcore start
+
+# Or use CLI flag
+nzcore start --verbose
+```
+
+### Support
+
+- **Documentation:** https://github.com/NewZoneProject/NewZoneCore/tree/main/docs
 - **Issues:** https://github.com/NewZoneProject/NewZoneCore/issues
 - **Security:** security@newzonecore.dev
 
 ---
 
-*Document Version: 1.0*  
-*Last Updated: 20 февраля 2026 г.*
+*For more information, see README.md and ARCHITECTURE.md*

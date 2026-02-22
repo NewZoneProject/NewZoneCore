@@ -143,8 +143,12 @@ describe('Plugin API', () => {
     });
     
     it('should reject invalid manifest', () => {
-      const manifest = new PluginManifest({});
-      
+      const manifest = new PluginManifest({
+        name: '',  // Invalid: empty name
+        version: '',  // Invalid: empty version
+        main: ''  // Invalid: empty main
+      });
+
       const result = manifest.validate();
       expect(result.valid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
@@ -235,9 +239,9 @@ describe('PluginLoader', () => {
       version: '1.0.0',
       main: 'index.js'
     };
-    
+
     const code = `
-import { Plugin } from '../../core/plugins/api.js';
+import { Plugin } from 'nzcore/plugins';
 
 export default class TestPlugin extends Plugin {
   constructor() {
@@ -266,7 +270,7 @@ export default class TestPlugin extends Plugin {
     };
     
     const code = `
-import { Plugin } from '../../core/plugins/api.js';
+import { Plugin } from 'nzcore/plugins';
 
 export default class TestPlugin extends Plugin {
   constructor() {
@@ -298,7 +302,7 @@ export default class TestPlugin extends Plugin {
     };
     
     const code = `
-import { Plugin } from '../../core/plugins/api.js';
+import { Plugin } from 'nzcore/plugins';
 export default class TestPlugin extends Plugin {
   constructor() {
     super();
@@ -353,7 +357,7 @@ export default class TestPlugin extends Plugin {
     };
     
     const code = `
-import { Plugin } from '../../core/plugins/api.js';
+import { Plugin } from 'nzcore/plugins';
 export default class TestPlugin extends Plugin {
   constructor() {
     super();
@@ -380,7 +384,7 @@ export default class TestPlugin extends Plugin {
     };
     
     const code = `
-import { Plugin } from '../../core/plugins/api.js';
+import { Plugin } from 'nzcore/plugins';
 export default class TestPlugin extends Plugin {
   constructor() {
     super();

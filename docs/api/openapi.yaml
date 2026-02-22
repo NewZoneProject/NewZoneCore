@@ -1,0 +1,658 @@
+openapi: 3.0.3
+info:
+  title: NewZoneCore API
+  description: |
+    Autonomous Trust and Process Core for Distributed Systems
+    
+    ## Authentication
+    Most endpoints require authentication using either:
+    - **JWT Bearer Token**: Include in `Authorization: Bearer <token>` header
+    - **API Key**: Include in `X-API-Key: <key>` header
+    
+    ## Rate Limiting
+    - Maximum 5 login attempts per 15 minutes
+    - Maximum 100 requests per minute per IP
+    
+    ## Environment
+    - Production API: `https://api.newzonecore.dev`
+    - Development API: `http://localhost:3000`
+  version: 0.3.0
+  contact:
+    name: NewZoneProject Support
+    url: https://github.com/NewZoneProject/NewZoneCore/issues
+    email: support@newzonecore.dev
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://api.newzonecore.dev
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: Authentication and authorization endpoints
+  - name: Identity
+    description: Identity and profile management
+  - name: Trust
+    description: Trust store and peer management
+  - name: Network
+    description: Network and routing operations
+  - name: Storage
+    description: Secure storage operations
+  - name: Services
+    description: Service management
+  - name: Backup
+    description: Backup and recovery operations
+  - name: Admin
+    description: Administrative operations
+  - name: Observability
+    description: Metrics, health, and monitoring
+
+paths:
+  /api/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Login
+      description: Authenticate with password and receive JWT tokens
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                password:
+                  type: string
+                  minLength: 8
+                  example: "SecurePassword123!"
+      responses:
+        '200':
+          description: Successful authentication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Too many attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh Token
+      description: Refresh access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken:
+                    type: string
+                  expiresIn:
+                    type: integer
+        '401':
+          description: Invalid refresh token
+
+  /api/auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: Logout
+      description: Invalidate current session
+      operationId: logout
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Logged out successfully
+
+  /api/identity:
+    get:
+      tags:
+        - Identity
+      summary: Get Current Identity
+      description: Get the current node identity
+      operationId: getIdentity
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Identity information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Identity'
+
+  /api/identity/profiles:
+    get:
+      tags:
+        - Identity
+      summary: List Profiles
+      description: List all identity profiles
+      operationId: listProfiles
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of profiles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IdentityProfile'
+
+    post:
+      tags:
+        - Identity
+      summary: Create Profile
+      description: Create a new identity profile
+      operationId: createProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: Profile created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityProfile'
+
+  /api/trust:
+    get:
+      tags:
+        - Trust
+      summary: Get Trust Store
+      description: Get the current trust store
+      operationId: getTrust
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Trust store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrustStore'
+
+    post:
+      tags:
+        - Trust
+      summary: Add Trusted Peer
+      description: Add a new trusted peer
+      operationId: addPeer
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+                - pubkey
+              properties:
+                id:
+                  type: string
+                pubkey:
+                  type: string
+                trustLevel:
+                  type: string
+                  enum: [UNKNOWN, LOW, MEDIUM, HIGH, ULTIMATE]
+      responses:
+        '200':
+          description: Peer added
+        '400':
+          description: Invalid input
+
+  /api/trust?id={peerId}:
+    delete:
+      tags:
+        - Trust
+      summary: Remove Trusted Peer
+      description: Remove a trusted peer
+      operationId: removePeer
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: peerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Peer removed
+        '404':
+          description: Peer not found
+
+  /api/network/status:
+    get:
+      tags:
+        - Network
+      summary: Get Network Status
+      description: Get current network status
+      operationId: getNetworkStatus
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Network status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkStatus'
+
+  /api/routing:
+    get:
+      tags:
+        - Network
+      summary: Get Routing Table
+      description: Get the current routing table
+      operationId: getRoutingTable
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Routing table
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  routes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Route'
+
+  /api/storage/files:
+    get:
+      tags:
+        - Storage
+      summary: List Files
+      description: List all files in storage
+      operationId: listFiles
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+
+  /api/storage/kv:
+    get:
+      tags:
+        - Storage
+      summary: Get KV Value
+      description: Get a value from the key-value store
+      operationId: getKV
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Value retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value: {}
+        '404':
+          description: Key not found
+
+    post:
+      tags:
+        - Storage
+      summary: Set KV Value
+      description: Set a value in the key-value store
+      operationId: setKV
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - key
+                - value
+              properties:
+                key:
+                  type: string
+                value: {}
+      responses:
+        '200':
+          description: Value set
+
+  /api/services:
+    get:
+      tags:
+        - Services
+      summary: List Services
+      description: List all services
+      operationId: listServices
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Service'
+
+  /api/backup/list:
+    get:
+      tags:
+        - Backup
+      summary: List Backups
+      description: List all backups
+      operationId: listBackups
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of backups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Backup'
+
+  /api/backup/create:
+    post:
+      tags:
+        - Backup
+      summary: Create Backup
+      description: Create a new backup
+      operationId: createBackup
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [full, incremental, differential]
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Backup created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Backup'
+
+  /api/status:
+    get:
+      tags:
+        - Admin
+      summary: Get System Status
+      description: Get overall system status
+      operationId: getStatus
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+
+  /health:
+    get:
+      tags:
+        - Observability
+      summary: Health Check
+      description: Check system health
+      operationId: healthCheck
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: System is unhealthy
+
+  /metrics:
+    get:
+      tags:
+        - Observability
+      summary: Prometheus Metrics
+      description: Get metrics in Prometheus format
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus-format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            username:
+              type: string
+            roles:
+              type: array
+              items:
+                type: string
+
+    Identity:
+      type: object
+      properties:
+        nodeId:
+          type: string
+        ed25519Public:
+          type: string
+        x25519Public:
+          type: string
+
+    IdentityProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        nodeId:
+          type: string
+
+    TrustStore:
+      type: object
+      properties:
+        peers:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              pubkey:
+                type: string
+              trustLevel:
+                type: string
+
+    NetworkStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        peers:
+          type: integer
+        dhtSize:
+          type: integer
+
+    Route:
+      type: object
+      properties:
+        peerId:
+          type: string
+        nextHop:
+          type: string
+        metric:
+          type: integer
+
+    Service:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        state:
+          type: string
+          enum: [running, stopped, error]
+        uptime:
+          type: integer
+
+    Backup:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        size:
+          type: integer
+        status:
+          type: string
+
+    SystemStatus:
+      type: object
+      properties:
+        startedAt:
+          type: string
+          format: date-time
+        uptime:
+          type: integer
+        version:
+          type: string
+        nodeId:
+          type: string
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        checks:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
